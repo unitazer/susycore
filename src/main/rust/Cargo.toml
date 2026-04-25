@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+members = ["susycore"]
+
+[workspace.package]
+edition="2024"
+version="0.0.1"
+[workspace.dependencies]
+jni = "0.22"
+

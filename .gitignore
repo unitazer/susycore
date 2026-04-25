@@ -83,6 +83,7 @@ run/
 logs/
 /modpack/
 src/main/resources/mixins.susy.json
+src/main/rust/**/target/
 
 !run/config/supercritical.cfg
 
