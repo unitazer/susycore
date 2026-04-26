@@ -1,0 +1,55 @@
+use rapier3d::math::Vec3;
+use rapier3d::prelude::*;
+
+//dimension specific information, root structure for the physics simulation
+pub struct Scene {
+  pub pipeline: PhysicsPipeline,
+  pub rigid_body_set: RigidBodySet,
+  pub collider_set: ColliderSet,
+  pub island_manager: IslandManager,
+  pub broad_phase: DefaultBroadPhase,
+  pub narrow_phase: NarrowPhase,
+  pub impulse_joint_set: ImpulseJointSet,
+  pub multibody_joint_set: MultibodyJointSet,
+  pub ccd_solver: CCDSolver,
+  pub integration: IntegrationParameters,
+  pub gravity: Vec3,
+}
+
+impl Scene {
+  fn new(gravity: Vec3) -> Self {
+    let rigid_body_set = RigidBodySet::new();
+    let collider_set = ColliderSet::new();
+    let integration = IntegrationParameters {
+      dt: 1. / 20.,
+      min_ccd_dt: 1. / 100.,
+      normalized_allowed_linear_error: 0.0025,
+      normalized_max_corrective_velocity: 50.0,
+      normalized_prediction_distance: 0.005,
+      num_solver_iterations: todo!(),
+      max_ccd_substeps: 3,
+      friction_model: FrictionModel::Simplified,
+      ..Default::default()
+    };
+    let pipeline = PhysicsPipeline::new();
+    let island_manager = IslandManager::new();
+    let broad_phase = DefaultBroadPhase::new();
+    let narrow_phase = NarrowPhase::new();
+    let impulse_joint_set = ImpulseJointSet::new();
+    let multibody_joint_set = MultibodyJointSet::new();
+    let ccd_solver = CCDSolver::new();
+    Self {
+      broad_phase,
+      pipeline,
+      rigid_body_set,
+      collider_set,
+      island_manager,
+      narrow_phase,
+      impulse_joint_set,
+      multibody_joint_set,
+      ccd_solver,
+      integration,
+      gravity,
+    }
+  }
+}

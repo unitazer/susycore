@@ -1,4 +1,6 @@
 pub mod logger;
+pub mod scene;
+pub mod block_collisions;
 
 use jni::errors::{Error, ThrowRuntimeExAndDefault};
 use jni::{EnvUnowned, objects::JClass};

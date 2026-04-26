@@ -13,4 +13,6 @@ env_logger = "0.11.10"
 jni = { workspace = true, features = ["invocation"] }
 log = "0.4.29"
 once_cell = "1.21.4"
+ordered-float = "5.3.0"
+rapier3d = { version = "0.32", features = ["parallel", "serde-serialize", "simd-stable"] }
 

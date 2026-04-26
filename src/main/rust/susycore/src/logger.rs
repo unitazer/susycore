@@ -30,12 +30,13 @@ impl Log for SusycoreJavaLogger {
               .find_class(jni_str!("supersymmetry/common/Native"))
               .unwrap();
             let str = env.new_string(format!("{}", record.args())).unwrap();
+            let args = &[JValue::from(level), JValue::Object(&str)];
             env
               .call_static_method(
                 class,
                 jni_str!("log"),
-                jni_sig!(sig = (arg1:jint,arg2:JString)),
-                &[JValue::from(level), JValue::Object(&str)],
+                jni_sig!("(ILjava/lang/String;)V"),
+                args,
               )
               .unwrap();
 
