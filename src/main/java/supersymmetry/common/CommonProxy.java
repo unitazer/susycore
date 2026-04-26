@@ -73,6 +73,8 @@ public class CommonProxy {
         SusyStoneTypes.init();
         Particles.init();
         Particles.register();
+        Native.init();
+        Native.goog();
     }
 
     /**

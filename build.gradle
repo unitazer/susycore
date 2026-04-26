@@ -634,6 +634,85 @@ test {
     }
 }
 
+//rust integration
+
+def linux(arch) {
+    [triple: "${arch}-unknown-linux-gnu", arch: arch, os: "linux", ext: "so", libPrefix: "lib"]
+}
+
+def windows(arch) {
+    [triple: "${arch}-pc-windows-msvc", arch: arch, os: "windows", ext: "dll", libPrefix: ""]
+}
+
+def supportedTargets = [
+    linux("x86_64"),
+    linux("aarch64"),
+]
+
+def currentOs = System.getProperty('os.name').toLowerCase().contains('windows') ? 'windows' : 'linux'
+def targetsToBuild = supportedTargets.findAll { it.os == currentOs && it.arch == 'x86_64' }
+
+project.ext.devOs = currentOs
+project.ext.devArch = 'x86_64'
+project.ext.libPrefix = currentOs == 'windows' ? '' : 'lib'
+project.ext.libExt = currentOs == 'windows' ? 'dll' : 'so'
+
+def rustProjectDir = file("src/main/rust")
+def nativesDir = file("src/main/resources/natives/susycore")
+
+supportedTargets.each { target ->
+    tasks.register("compileRust-${target.os}-${target.arch}", Exec) {
+        group = 'rust'
+        workingDir rustProjectDir
+        commandLine 'cargo', 'build', '--release', '--target', target.triple
+    }
+}
+
+tasks.register('compileRustDev', Exec) {
+    group = 'rust'
+    workingDir rustProjectDir
+    commandLine 'cargo', 'build'
+}
+
+tasks.register('copyRustNatives', Copy) {
+    group = 'rust'
+    into nativesDir
+    
+    supportedTargets.each { target ->
+        def sourceFile = file("$rustProjectDir/target/${target.triple}/release/${target.libPrefix}susycore.${target.ext}")
+        if (sourceFile.exists()) {
+            from(sourceFile) {
+                rename { "susycore_${target.arch}_${target.os}.${target.ext}" }
+            }
+        }
+    }
+}
+
+tasks.register('copyRustNativesDev', Copy) {
+    group = 'rust'
+    into nativesDir
+    from(file("$rustProjectDir/target/debug/${project.ext.libPrefix}susycore.${project.ext.libExt}")) {
+        rename { "susycore_${project.ext.devArch}_${project.ext.devOs}.${project.ext.libExt}" }
+    }
+}
+
+tasks.register('buildRustNatives') {
+    group = 'build'
+    dependsOn supportedTargets.collect { "compileRust-${it.os}-${it.arch}" }
+    finalizedBy copyRustNatives
+}
+
+tasks.named('build').configure {
+    dependsOn buildRustNatives
+}
+
+tasks.named('processResources').configure {
+    mustRunAfter copyRustNatives
+    mustRunAfter copyRustNativesDev
+}
+tasks.named('sourcesJar').configure {
+    mustRunAfter copyRustNatives
+}
 
 // Resource processing and jar building
 
@@ -759,6 +838,10 @@ if (separateRunDirectories.toBoolean()) {
     runServer {
         workingDir = file('run/server')
     }
+}
+
+tasks.named('runClient').configure {
+    dependsOn compileRustDev, copyRustNativesDev
 }
 
 // Create API library jar
