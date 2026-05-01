@@ -1,8 +1,10 @@
 package supersymmetry.api.phys;
 
+import gregtech.api.pipenet.block.BlockPipe;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Optional;
 import net.minecraft.block.Block;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
@@ -12,68 +14,68 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
+import supersymmetry.api.SusyLog;
 
 public class Rapier {
-  // IBlockState -> VoxelInformation handle
+  // IBlockState -> collision data handle
   // ideally this would hash the World aswell but thats probably too much
-  private static HashMap<IBlockState, BlockCollisionsHandle> BlockStateCache = new HashMap<>();
+  // doesnt work well with TE's
+  private static HashMap<IBlockState, Integer> blockStateCache = new HashMap<>();
+  public static HashMap<World, Integer> initializedWorlds = new HashMap<>();
 
-  private static native void initialize(int dimension, double gravity, double drag);
-
-  // returns a BlockCollisionsHandle
-  // the aabbs double array must have n%6==0 elements
-  private static native int addColliderInfo(
-      double friction, double volume, double restitution, double[] aabbs);
-
-  // stuff that deals with terrain specifically
-
-  // xy chunk coordniates (chunk space)
-  // [subchunk][xzy BlockCollisionsHandle] data
-  private static native void addChunk(int dimension, int x, int z, int[][] data);
-
-  // todo
-  private static native void removeChunk(int dimension, int x, int z);
-
-  // todo
-  private static native void partialSubchunkUpdate(
-      int dimension, int chunk_x, int chunk_z, int x, int y, int z, int new_data);
-
-  private static double volume(AxisAlignedBB aabb) {
-    double x = aabb.maxX - aabb.minX;
-    double y = aabb.maxY - aabb.minY;
-    double z = aabb.maxZ - aabb.minZ;
-    return x * y * z;
+  // drag should be very low unless its somewhere in an endless ocean
+  public static void initialize_world(World world, float gravity, double drag) {
+    if (initializedWorlds.containsKey(world)) {
+      return;
+    }
+    var x = initializedWorlds.size();
+    initialize(x, gravity, drag);
+    initializedWorlds.put(world, Integer.valueOf(x));
   }
 
-  public void handleChunkAddition(Chunk chunk) {
-    // todo maybe keep this outside of the function?
+  public static void handleChunkAddition(Chunk chunk) {
+    // TODO maybe keep this outside of the function?
     AxisAlignedBB chunk_box =
         new AxisAlignedBB(BlockPos.ORIGIN, new BlockPos(16, 256, 16))
-            .offset(chunk.x >> 4, 0, chunk.z >> 4);
+            .offset(chunk.x * 16, 0, chunk.z * 16);
 
     World world = chunk.getWorld();
-    // todo maybe keep this outside of the function?
+    if (!initializedWorlds.containsKey(world)) {
+      SusyLog.logger.error("handleChunkAddition on a chunk from an uninitialized world");
+      return;
+    }
+    // TODo maybe keep this outside of the function?
     List<AxisAlignedBB> aabb_tmp = new ArrayList<>();
+
+    long startTime = System.nanoTime();
+    int[][] chunkdata = new int[16][4096];
+
+    var pos = BlockPos.PooledMutableBlockPos.retain();
 
     for (int i = 0; i < chunk.storageArrays.length; i++) {
       ExtendedBlockStorage subchunk = chunk.storageArrays[i];
       if (subchunk == null || subchunk.isEmpty()) {
         continue;
       }
-      int ybase = subchunk.getYLocation();
+      int chunkBaseY = subchunk.getYLocation();
       int[] subchunkColliderInfo = new int[4096];
-      for (int lx = 0; lx < 16; lx++) {
+      int chunkBaseX = chunk.x * 16;
+      int chunkBaseZ = chunk.z * 16;
+      for (int ly = 0; ly < 16; ly++) {
         for (int lz = 0; lz < 16; lz++) {
-          for (int ly = 0; ly < 16; ly++) {
-            final int lxF = lx;
-            final int lzF = lz;
-            final int lyF = ly;
+          for (int lx = 0; lx < 16; lx++) {
+
+            int worldX = chunkBaseX + lx;
+            int worldY = chunkBaseY + ly;
+            int worldZ = chunkBaseZ + lz;
+            pos.setPos(worldX, worldY, worldZ);
+
             IBlockState blockstate1 = subchunk.get(lx, ly, lz);
             Block block = blockstate1.getBlock();
             if (block == Blocks.AIR) {
               continue;
             }
-            if (block.isPassable(world, new BlockPos(lx, ly, lz))) {
+            if (block.isPassable(world, pos)) {
               continue;
             }
             if (blockstate1.getMaterial() == Material.WATER
@@ -81,45 +83,91 @@ public class Rapier {
               continue; // not dealing with that yet
             }
 
-            BlockCollisionsHandle colliderInfoHandle =
-                BlockStateCache.computeIfAbsent(
-                    blockstate1,
-                    (blockstate) -> {
-                      int worldX = chunk.x * 16 + lxF;
-                      int worldY = ybase + lyF;
-                      int worldZ = chunk.z * 16 + lzF;
-                      // todo use mutableblockpos
-                      BlockPos pos = new BlockPos(worldX, worldY, worldZ);
-                      float friction =
-                          Math.max(
-                              Math.min(1 - block.getSlipperiness(blockstate1, world, pos, null), 0),
-                              1);
-                      aabb_tmp.clear();
-                      blockstate.addCollisionBoxToList(world, pos, chunk_box, aabb_tmp, null, true);
-                      double[] box_data = new double[aabb_tmp.size() * 6];
+            Integer colliderInfoHandle = -1; // -1 for voxels
 
-                      for (int j = 0; j < aabb_tmp.size() * 6; j += 6) {
-                        AxisAlignedBB box = aabb_tmp.get(j);
-                        box_data[j] = box.minX - worldX;
-                        box_data[j + 1] = box.minY - worldY;
-                        box_data[j + 2] = box.minZ - worldZ;
-                        box_data[j + 3] = box.maxX - worldX;
-                        box_data[j + 4] = box.maxY - worldY;
-                        box_data[j + 5] = box.maxZ - worldZ;
-                      }
+            if (!blockstate1.isFullCube() && !blockstate1.isNormalCube()) {
+              colliderInfoHandle =
+                  blockStateCache.computeIfAbsent(
+                      blockstate1,
+                      (blockstate) -> {
+                        float friction =
+                            Math.max(
+                                Math.min(
+                                    1f - block.getSlipperiness(blockstate, world, pos, null), 0),
+                                1);
+                        aabb_tmp.clear();
+                        blockstate.addCollisionBoxToList(
+                            world, pos, chunk_box, aabb_tmp, null, true);
+                        int size = aabb_tmp.size();
+                        double[] box_data = new double[size * 6];
 
-                      addColliderInfo(
-                          friction,
-                          aabb_tmp.stream().mapToDouble(x -> this.volume(x)).sum(),
-                          friction,
-                          box_data);
-                      return null;
-                    });
-            int index = ly << 8 | lz << 4 | lx;
-            subchunkColliderInfo[index] = colliderInfoHandle.handle();
+                        for (int j = 0; j < size; j++) {
+                          AxisAlignedBB box = aabb_tmp.get(j);
+                          int j0 = j * 6;
+                          box_data[j0] = box.minX - worldX;
+                          box_data[j0 + 1] = box.minY - worldY;
+                          box_data[j0 + 2] = box.minZ - worldZ;
+                          box_data[j0 + 3] = box.maxX - worldX;
+                          box_data[j0 + 4] = box.maxY - worldY;
+                          box_data[j0 + 5] = box.maxZ - worldZ;
+                        }
+                        // TODO remove
+                        SusyLog.logger.info("{}", blockstate.getBlock().getTranslationKey());
+                        if (blockstate.getBlock() instanceof BlockPipe pipe) {
+                          var pipe2 = Optional.ofNullable(pipe.getPipeTileEntity(world, pos));
+                          SusyLog.logger.info("pipe!! {} {}", pos, pipe2);
+                        }
+                        int h =
+                            addColliderInfo(
+                                friction,
+                                // aabb_tmp.stream().mapToDouble(x -> volume(x)).sum(),
+                                0.9, // TODO
+                                1000.0, // TODO
+                                box_data);
+                        return h;
+                      });
+              int index = ly << 8 | lz << 4 | lx;
+              subchunkColliderInfo[index] = colliderInfoHandle;
+            }
           }
         }
       }
+      chunkdata[i] = subchunkColliderInfo;
     }
+    pos.release();
+    var x = initializedWorlds.get(world);
+    addChunk(x.intValue(), chunk.x, chunk.z, chunkdata);
+
+    long endTime = System.nanoTime();
+
+    SusyLog.logger.info(
+        String.format("handleChunkAddition took %.3f ms", (endTime - startTime) / 1000000f));
+  }
+
+  private static native void initialize(int world_id, float gravity, double universal_drag);
+
+  // stuff that deals with terrain specifically
+
+  // returns a handle
+  // the aabbs double array must have n%6==0 elements
+  private static native int addColliderInfo(
+      double friction, double restitution, double density, double[] aabbs);
+
+  // xy chunk coordniates (chunk space)
+  // [subchunk][xzy int handle] data
+  private static native void addChunk(int world_id, int x, int z, int[][] data);
+
+  // todo
+  private static native void removeChunk(int world_id, int x, int z);
+
+  // todo
+  private static native void partialSubchunkUpdate(
+      int world_id, int chunk_x, int chunk_z, int chunk_y, int x, int y, int z, int new_data);
+
+  private static double volume(AxisAlignedBB aabb) {
+    double x = aabb.maxX - aabb.minX;
+    double y = aabb.maxY - aabb.minY;
+    double z = aabb.maxZ - aabb.minZ;
+    return x * y * z;
   }
 }

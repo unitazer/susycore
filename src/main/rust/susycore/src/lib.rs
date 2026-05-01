@@ -7,9 +7,12 @@ use jni::{EnvUnowned, objects::JClass};
 
 use self::logger::SusycoreJavaLogger;
 
+pub type Real = rapier3d::math::Real;
+
 fn goog() {
   log::info!("logger goog...");
 }
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_common_Native_goog(_env: EnvUnowned, _class: JClass) {
   goog();

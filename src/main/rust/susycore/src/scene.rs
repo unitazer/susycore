@@ -1,3 +1,5 @@
+use std::sync::{LazyLock, Mutex};
+
 use rapier3d::math::Vec3;
 use rapier3d::prelude::*;
 
@@ -15,8 +17,38 @@ pub struct Scene {
   pub integration: IntegrationParameters,
   pub gravity: Vec3,
 }
-
+static SCENES: LazyLock<Mutex<Vec<Scene>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 impl Scene {
+  pub fn with_scenes<F, R>(f: F) -> R
+  where
+    F: FnOnce(&mut Vec<Scene>) -> R,
+  {
+    let mut v = SCENES.lock().unwrap();
+    f(&mut *v)
+  }
+  pub fn with_scene<F, R>(i: usize, f: F) -> R
+  where
+    F: FnOnce(&Scene) -> R,
+  {
+    let v = SCENES.lock().unwrap();
+    f(&v[i])
+  }
+  pub fn with_scene_mut<F, R>(i: usize, f: F) -> R
+  where
+    F: FnOnce(&mut Scene) -> R,
+  {
+    let mut v = SCENES.lock().unwrap();
+    f(&mut v[i])
+  }
+  pub fn initialize_scene(dim: usize, gravity: Vec3) {
+    Self::with_scenes(|x| {
+      if dim == x.len() {
+        x.push(Self::new(gravity));
+      } else {
+        panic!("?????");
+      }
+    });
+  }
   fn new(gravity: Vec3) -> Self {
     let rigid_body_set = RigidBodySet::new();
     let collider_set = ColliderSet::new();
@@ -26,7 +58,7 @@ impl Scene {
       normalized_allowed_linear_error: 0.0025,
       normalized_max_corrective_velocity: 50.0,
       normalized_prediction_distance: 0.005,
-      num_solver_iterations: todo!(),
+      num_solver_iterations: 3,
       max_ccd_substeps: 3,
       friction_model: FrictionModel::Simplified,
       ..Default::default()

@@ -59,6 +59,7 @@ import gregtech.api.util.input.KeyBind;
 import software.bernie.geckolib3.GeckoLib;
 import supersymmetry.SuSyValues;
 import supersymmetry.Supersymmetry;
+import supersymmetry.api.phys.Rapier;
 import supersymmetry.api.recipes.catalysts.CatalystGroup;
 import supersymmetry.api.recipes.catalysts.CatalystInfo;
 import supersymmetry.api.util.RenderMaskManager;
@@ -238,7 +239,6 @@ public class ClientProxy extends CommonProxy {
     public static void afterRenderSubtitles(RenderGameOverlayEvent.Pre event) {
         // Subtitles are the last thing to render before the titles, and it seems bad to not let the subtitles render,
         // so this is the best place.
-
         if (event.getType() == RenderGameOverlayEvent.ElementType.SUBTITLES && titleRenderTimer >= 0) {
             // Render a black foreground. The alpha should stay at 255 until the first title, at which it starts fading.
             // This is taken from Gui.java, with some cleanup.

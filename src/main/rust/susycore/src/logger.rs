@@ -29,7 +29,7 @@ impl Log for SusycoreJavaLogger {
             let class = env
               .find_class(jni_str!("supersymmetry/common/Native"))
               .unwrap();
-            let str = env.new_string(format!("{}", record.args())).unwrap();
+            let str = env.new_string(format!("[rust] {}", record.args())).unwrap();
             let args = &[JValue::from(level), JValue::Object(&str)];
             env
               .call_static_method(

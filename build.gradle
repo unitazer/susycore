@@ -635,6 +635,7 @@ test {
 }
 
 //rust integration
+//this is clankered because my gradle lsp doesnt work
 
 def linux(arch) {
     [triple: "${arch}-unknown-linux-gnu", arch: arch, os: "linux", ext: "so", libPrefix: "lib"]
