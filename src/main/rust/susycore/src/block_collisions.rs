@@ -1,86 +1,46 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::mem::{self, transmute};
-use std::os::raw::c_void;
+use std::mem::{self};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-use glow::{Context, HasContext};
 use itertools::Itertools;
 use jni::EnvUnowned;
 use jni::objects::{JClass, JDoubleArray, JIntArray, JObjectArray};
-use jni::sys::{jdouble, jdoubleArray, jfloat, jfloatArray, jint, jobjectArray};
+use jni::sys::{jdouble, jfloat, jint};
 use log::info;
 use ordered_float::OrderedFloat;
 use rapier3d::glamx::{Quat, usize};
-use rapier3d::math::{Pose, Vec3, Vec3A, Vector3};
+use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::Aabb;
 use rapier3d::parry::shape::Cuboid;
-use rapier3d::prelude::{
-  ActiveHooks, Collider, ColliderBuilder, ColliderHandle, Compound, MassProperties, RigidBody,
-  RigidBodyBuilder, SharedShape,
-};
+use rapier3d::prelude::{Collider, ColliderBuilder, SharedShape};
+use rapier3d::rayon::iter::ParallelIterator;
 
 use crate::Real;
+use crate::chunklet::Chunklet;
 use crate::scene::Scene;
+//TODO callbacks
 
-pub struct TerrainData {
-  //TODO align to 64 bits
-  subchunk_map: HashMap<(i32, u8, i32), ColliderHandle>,
-}
-
-impl TerrainData {
-  //xyz are subchunk coordinates in chunk space
-  fn add_subchunk(&mut self, scene: &mut Scene, x: i32, y: i32, z: i32, subchunk: Collider) {
-    let mut subchunk = subchunk;
-    //a dumb cast is good here because 𝑓₃₂ ⊇ 𝑖₃₂ im pretty sure
-    subchunk.set_translation(Vec3::new(
-      (x * 16) as Real,
-      (y * 16) as Real,
-      (z * 16) as Real,
-    ));
-    let handle = scene.collider_set.insert(subchunk);
-    self
-      .subchunk_map
-      .insert((x, y.try_into().expect("no cubic chunks"), z), handle);
-  }
-  //TODO this is the dumbest possible implementation, the AABBs should definitely be merged
-  fn make_subchunk_collider_from(
-    subchunk_data: &[i32; 4096],
-    f: impl Fn(i32) -> MinecraftBlockColliderInfo,
-  ) -> SharedShape {
-    let mut shape_cache = SHAPE_CACHE.lock().expect("rust bug not mine");
-    let mut compound_elements = vec![];
-    for y in 0..16 {
-      for z in 0..16 {
-        for x in 0..16 {
-          let index = y << 8 | z << 4 | x;
-          debug_assert!(index < 4096);
-          let block = subchunk_data[index];
-          let block = f(block);
-          for cbox in block.boxes {
-            let (pose, cbox) = shape_cache.from_aabb(cbox);
-            let pose = pose.append_translation(Vec3::new(x as Real, y as Real, z as Real));
-            compound_elements.push((pose, cbox));
-          }
-        }
-      }
-    }
-    SharedShape::compound(compound_elements)
-  }
-}
-#[derive(PartialEq)]
-pub struct MinecraftBlockColliderInfo {
-  friction: Real,
-  restitution: Real,
-  density: Real,
-  boxes: Vec<Aabb>,
-}
 pub struct ShapeCache(
   pub HashMap<(OrderedFloat<f32>, OrderedFloat<f32>, OrderedFloat<f32>), SharedShape>,
 );
 
-static SHAPE_CACHE: LazyLock<Mutex<ShapeCache>> = LazyLock::new(|| Mutex::new(ShapeCache::new()));
-static COLLIDERS: RwLock<Vec<MinecraftBlockColliderInfo>> = RwLock::new(Vec::new());
+pub static SHAPE_CACHE: LazyLock<Mutex<ShapeCache>> =
+  LazyLock::new(|| Mutex::new(ShapeCache::new()));
+pub static COLLIDERS: RwLock<Vec<MinecraftBlockColliderInfo>> = RwLock::new(Vec::new());
+pub const AIR_HANDLE: BlockColliderInfoHandle = BlockColliderInfoHandle(0);
+#[derive(Eq, PartialOrd, Ord, PartialEq, Hash, Copy, Clone)]
+pub struct BlockColliderInfoHandle(pub(crate) u32);
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct MinecraftBlockColliderInfo {
+  pub friction: Real,
+  pub restitution: Real,
+  pub density: Real,
+  pub mass: Real,
+  pub boxes: Vec<Aabb>,
+}
+
 impl MinecraftBlockColliderInfo {
   pub fn new(friction: Real, density: Real, restitution: Real, boxes: Vec<Aabb>) -> Self {
     debug_assert!(boxes.len() >= 1);
@@ -88,20 +48,33 @@ impl MinecraftBlockColliderInfo {
       friction,
       density,
       restitution,
+      mass: boxes.iter().map(|x| x.volume()).sum(),
       boxes,
     }
   }
-  pub fn handle(self) -> usize {
+  pub fn handle_deref<T>(
+    h: BlockColliderInfoHandle,
+    f: impl FnOnce(&MinecraftBlockColliderInfo) -> T,
+  ) -> Option<T> {
+    let colliders = COLLIDERS.read().expect("rust bug not mine");
+    colliders
+      .get((h.0.overflowing_sub(1).0) as usize)
+      .map(|x| f(x))
+  }
+  pub fn handle(self) -> BlockColliderInfoHandle {
     let colliders = &mut *COLLIDERS.write().expect("rust bug not mine");
     let index = colliders.len();
     //TODO fix this
     //this is a very bad thing to do because PartialEq for this is going to be expensive and
     //not vectorized at all
     if let Some(x) = colliders.iter().position(|x| x == &self) {
-      return x;
+      return BlockColliderInfoHandle(x as u32);
     }
     colliders.push(self);
-    index
+    let out = BlockColliderInfoHandle(index as u32 + 1);
+    //im going insane
+    debug_assert!(out != AIR_HANDLE);
+    out
   }
 
   //either a cuboid or a compound  shape, not for turning entire chunks into colliders but only a
@@ -109,7 +82,7 @@ impl MinecraftBlockColliderInfo {
   pub fn into_collider(self) -> Collider {
     if self.boxes.len() == 1 {
       let aabb = &self.boxes[0];
-      let cuboid = Cuboid::new(aabb.translated(-aabb.center()).half_extents());
+      let cuboid = Cuboid::new(aabb.half_extents());
       let shape = SharedShape(Arc::new(cuboid));
       return Self::to_collider(shape, self.friction, self.restitution, self.density);
     } else {
@@ -144,9 +117,9 @@ impl ShapeCache {
     Self(Default::default())
   }
 
-  fn from_aabb(&mut self, aabb: Aabb) -> (Pose, SharedShape) {
+  pub fn from_aabb(&mut self, aabb: Aabb) -> (Pose, SharedShape) {
     let pose = Pose::from_parts(aabb.center(), Quat::IDENTITY);
-    let half = aabb.translated(-aabb.center()).half_extents();
+    let half = aabb.half_extents();
     let key = (
       OrderedFloat(half.x),
       OrderedFloat(half.y),
@@ -182,18 +155,32 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
       Ok(())
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
+  debug_assert!(!buffer.iter().flatten().all(|x| *x == 0));
   info!(
     "addChunk: world={}, chunk=({}, {}), data received",
     world_id, x, z
   );
-  for i in 0..16 {}
-  todo!();
+  (0..16) //.par_bridge()
+    .for_each(|i| {
+      if buffer[i].iter().all(|x| *x == 0) {
+        info!("buffer {i} is empty");
+      } else {
+        let b = buffer[i]
+          .iter()
+          .map(|x| *x as u32)
+          .map(|x| BlockColliderInfoHandle(x))
+          .collect_array()
+          .unwrap();
+        let _c = Chunklet::new_with_blockhandle(b);
+        info!("shape built yay");
+      }
+    });
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_initialize(
-  env: EnvUnowned,
-  class: JClass,
+  _env: EnvUnowned,
+  _class: JClass,
   dimension: jint,
   gravity: jfloat,
   _drag: jdouble,
@@ -205,7 +192,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_initialize(
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
   mut env: EnvUnowned,
-  class: JClass,
+  _class: JClass,
   friction: jdouble,
   restitution: jdouble,
   density: jdouble,
@@ -219,7 +206,6 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
       Ok(buffer)
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
-  info!("aabb recovered: {:?}", aabbs_data);
 
   //TODO a Vec<f64> can be transmuted into Vec<Aabb> if Real = f64
   debug_assert!(aabbs_data.len() % 6 == 0);
@@ -250,42 +236,34 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
     restitution as Real,
     boxes_cast,
   );
-  //try_into because if this overflows it will definitely crash
-  collider.handle().try_into().unwrap()
+  info!("collider {collider:#?} added");
+  //try_into because if this overflows it will definitely get corrupted and should crash
+  collider.handle().0.try_into().unwrap()
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_supersymmetry_api_phys_Rapier_render_test() {
-  let gl = unsafe {
-    glow::Context::from_loader_function(|_| transmute(0usize))
-  };
-  unsafe  {
-      gl.blend_color(1.0, 1.0, 0.0, 1.0);
-  }
-}
-#[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunk(
-  env: EnvUnowned,
-  class: JClass,
-  dimension: jint,
-  x: jint,
-  z: jint,
+  _env: EnvUnowned,
+  _class: JClass,
+  _dimension: jint,
+  _x: jint,
+  _z: jint,
 ) {
   todo!()
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
-  env: EnvUnowned,
-  class: JClass,
+  _env: EnvUnowned,
+  _class: JClass,
   dimension: jint,
-  chunk_x: jint,
-  chunk_z: jint,
-  chunk_y: jint,
+  _chunk_x: jint,
+  _chunk_z: jint,
+  _chunk_y: jint,
   x: jint,
   y: jint,
   z: jint,
-  new_data: jint,
+  _new_data: jint,
 ) {
   debug_assert!(dimension >= 0);
   debug_assert!(x < 16 && x >= 0);

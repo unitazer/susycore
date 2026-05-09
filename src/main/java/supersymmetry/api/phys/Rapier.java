@@ -1,10 +1,8 @@
 package supersymmetry.api.phys;
 
-import gregtech.api.pipenet.block.BlockPipe;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Optional;
 import net.minecraft.block.Block;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
@@ -18,7 +16,7 @@ import supersymmetry.api.SusyLog;
 
 public class Rapier {
   // IBlockState -> collision data handle
-  // ideally this would hash the World aswell but thats probably too much
+  // ideally this would hash the coords aswell but thats probably too much
   // doesnt work well with TE's
   private static HashMap<IBlockState, Integer> blockStateCache = new HashMap<>();
   public static HashMap<World, Integer> initializedWorlds = new HashMap<>();
@@ -83,52 +81,41 @@ public class Rapier {
               continue; // not dealing with that yet
             }
 
-            Integer colliderInfoHandle = -1; // -1 for voxels
+            int colliderInfoHandle =
+                blockStateCache.computeIfAbsent(
+                    blockstate1,
+                    (blockstate) -> {
+                      float friction =
+                          Math.max(
+                              Math.min(1f - block.getSlipperiness(blockstate, world, pos, null), 0),
+                              1);
+                      aabb_tmp.clear();
+                      blockstate.addCollisionBoxToList(world, pos, chunk_box, aabb_tmp, null, true);
+                      int size = aabb_tmp.size();
+                      if (size == 0) {return 0;}
+                      double[] box_data = new double[size * 6];
 
-            if (!blockstate1.isFullCube() && !blockstate1.isNormalCube()) {
-              colliderInfoHandle =
-                  blockStateCache.computeIfAbsent(
-                      blockstate1,
-                      (blockstate) -> {
-                        float friction =
-                            Math.max(
-                                Math.min(
-                                    1f - block.getSlipperiness(blockstate, world, pos, null), 0),
-                                1);
-                        aabb_tmp.clear();
-                        blockstate.addCollisionBoxToList(
-                            world, pos, chunk_box, aabb_tmp, null, true);
-                        int size = aabb_tmp.size();
-                        double[] box_data = new double[size * 6];
-
-                        for (int j = 0; j < size; j++) {
-                          AxisAlignedBB box = aabb_tmp.get(j);
-                          int j0 = j * 6;
-                          box_data[j0] = box.minX - worldX;
-                          box_data[j0 + 1] = box.minY - worldY;
-                          box_data[j0 + 2] = box.minZ - worldZ;
-                          box_data[j0 + 3] = box.maxX - worldX;
-                          box_data[j0 + 4] = box.maxY - worldY;
-                          box_data[j0 + 5] = box.maxZ - worldZ;
-                        }
-                        // TODO remove
-                        SusyLog.logger.info("{}", blockstate.getBlock().getTranslationKey());
-                        if (blockstate.getBlock() instanceof BlockPipe pipe) {
-                          var pipe2 = Optional.ofNullable(pipe.getPipeTileEntity(world, pos));
-                          SusyLog.logger.info("pipe!! {} {}", pos, pipe2);
-                        }
-                        int h =
-                            addColliderInfo(
-                                friction,
-                                // aabb_tmp.stream().mapToDouble(x -> volume(x)).sum(),
-                                0.9, // TODO
-                                1000.0, // TODO
-                                box_data);
-                        return h;
-                      });
-              int index = ly << 8 | lz << 4 | lx;
-              subchunkColliderInfo[index] = colliderInfoHandle;
-            }
+                      for (int j = 0; j < size; j++) {
+                        AxisAlignedBB box = aabb_tmp.get(j);
+                        int j0 = j * 6;
+                        box_data[j0] = box.minX - worldX;
+                        box_data[j0 + 1] = box.minY - worldY;
+                        box_data[j0 + 2] = box.minZ - worldZ;
+                        box_data[j0 + 3] = box.maxX - worldX;
+                        box_data[j0 + 4] = box.maxY - worldY;
+                        box_data[j0 + 5] = box.maxZ - worldZ;
+                      }
+                      //very slow because of the jni
+                      int h =
+                          addColliderInfo(
+                              friction,
+                              0.9, // TODO
+                              1000.0, // TODO
+                              box_data);
+                      return h;
+                    });
+            int index = ly << 8 | lz << 4 | lx;
+            subchunkColliderInfo[index] = colliderInfoHandle;
           }
         }
       }

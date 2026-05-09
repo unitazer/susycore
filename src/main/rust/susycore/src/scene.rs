@@ -3,6 +3,8 @@ use std::sync::{LazyLock, Mutex};
 use rapier3d::math::Vec3;
 use rapier3d::prelude::*;
 
+use crate::chunklet::{Chunklet, TerrainData};
+
 //dimension specific information, root structure for the physics simulation
 pub struct Scene {
   pub pipeline: PhysicsPipeline,
@@ -15,6 +17,7 @@ pub struct Scene {
   pub multibody_joint_set: MultibodyJointSet,
   pub ccd_solver: CCDSolver,
   pub integration: IntegrationParameters,
+  pub terrain: TerrainData,
   pub gravity: Vec3,
 }
 static SCENES: LazyLock<Mutex<Vec<Scene>>> = LazyLock::new(|| Mutex::new(Vec::new()));
@@ -26,20 +29,24 @@ impl Scene {
     let mut v = SCENES.lock().unwrap();
     f(&mut *v)
   }
-  pub fn with_scene<F, R>(i: usize, f: F) -> R
+  pub fn with_scene<F, R>(i: usize, f: F) -> Option<R>
   where
     F: FnOnce(&Scene) -> R,
   {
     let v = SCENES.lock().unwrap();
-    f(&v[i])
+    v.get(i).map(|s| f(s))
   }
-  pub fn with_scene_mut<F, R>(i: usize, f: F) -> R
+  pub fn with_scene_mut<F, R>(i: usize, f: F) -> Option<R>
   where
     F: FnOnce(&mut Scene) -> R,
   {
     let mut v = SCENES.lock().unwrap();
-    f(&mut v[i])
+    v.get_mut(i).map(|s| f(s))
   }
+  pub fn add_chunklet(&mut self, x: i32, y: u8, z: i32, c: Chunklet) {
+    self.terrain.put(x, y, z, c);
+  }
+
   pub fn initialize_scene(dim: usize, gravity: Vec3) {
     Self::with_scenes(|x| {
       if dim == x.len() {
@@ -58,8 +65,8 @@ impl Scene {
       normalized_allowed_linear_error: 0.0025,
       normalized_max_corrective_velocity: 50.0,
       normalized_prediction_distance: 0.005,
-      num_solver_iterations: 3,
-      max_ccd_substeps: 3,
+      num_solver_iterations: 5,
+      max_ccd_substeps: 5,
       friction_model: FrictionModel::Simplified,
       ..Default::default()
     };
@@ -70,6 +77,7 @@ impl Scene {
     let impulse_joint_set = ImpulseJointSet::new();
     let multibody_joint_set = MultibodyJointSet::new();
     let ccd_solver = CCDSolver::new();
+    let terrain = TerrainData::new();
     Self {
       broad_phase,
       pipeline,
@@ -82,6 +90,7 @@ impl Scene {
       ccd_solver,
       integration,
       gravity,
+      terrain,
     }
   }
 }
