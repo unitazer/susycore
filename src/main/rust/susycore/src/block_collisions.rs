@@ -3,18 +3,17 @@ use std::hash::Hash;
 use std::mem::{self};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-use itertools::Itertools;
 use jni::EnvUnowned;
 use jni::objects::{JClass, JDoubleArray, JIntArray, JObjectArray};
-use jni::sys::{jdouble, jfloat, jint};
+use jni::sys::{jdouble, jfloat, jint, jlong};
 use log::info;
 use ordered_float::OrderedFloat;
+use rapier3d::data::Index;
 use rapier3d::glamx::{Quat, usize};
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::Aabb;
 use rapier3d::parry::shape::Cuboid;
-use rapier3d::prelude::{Collider, ColliderBuilder, SharedShape};
-use rapier3d::rayon::iter::ParallelIterator;
+use rapier3d::prelude::{Collider, ColliderBuilder, ColliderHandle, RigidBodyBuilder, SharedShape};
 
 use crate::Real;
 use crate::chunklet::Chunklet;
@@ -160,23 +159,51 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
     "addChunk: world={}, chunk=({}, {}), data received",
     world_id, x, z
   );
-  (0..16) //.par_bridge()
-    .for_each(|i| {
-      if buffer[i].iter().all(|x| *x == 0) {
-        info!("buffer {i} is empty");
-      } else {
-        let b = buffer[i]
-          .iter()
-          .map(|x| *x as u32)
-          .map(|x| BlockColliderInfoHandle(x))
-          .collect_array()
-          .unwrap();
-        let _c = Chunklet::new_with_blockhandle(b);
-        info!("shape built yay");
-      }
-    });
+  let _world = Scene::with_scene_mut(0, |xs| {
+    (0..16) //.par_bridge()
+      .for_each(|i| {
+        if buffer[i].iter().all(|x| *x == 0) {
+          info!("buffer {i} is empty");
+        } else {
+          let b = buffer[i]
+            .map(|x| x as u32)
+            .map(|x| BlockColliderInfoHandle(x));
+          let c = Chunklet::new_with_blockhandle(b);
+          xs.add_chunklet(x, i as u8, z, c);
+          info!("shape built yay");
+        }
+      });
+  });
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_RbInfo(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  handle: jlong,
+) {
+  let handle = handle as u64;
+  let handle = ColliderHandle(unsafe { mem::transmute(handle) });
+  log::info!("handle:{handle:?}");
+  Scene::with_scene(world_id as usize, |xs| {
+    let c = xs.collider_set.get(handle);
+    if let Some(collider) = c {
+      log::info!("collider obtained\nc:{collider:#?}");
+      if let Some(rb) = collider
+        .parent()
+        .map(|x| xs.rigid_body_set.get(x))
+        .flatten()
+      {
+        log::info!(
+          "rb obtained from handle {:?}\nrb:{rb:#?}",
+          collider.parent()
+        );
+        log::info!("pos:{}", rb.position().translation);
+      }
+    }
+  });
+}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_initialize(
   _env: EnvUnowned,
@@ -236,7 +263,6 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
     restitution as Real,
     boxes_cast,
   );
-  info!("collider {collider:#?} added");
   //try_into because if this overflows it will definitely get corrupted and should crash
   collider.handle().0.try_into().unwrap()
 }
@@ -250,6 +276,33 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunk(
   _z: jint,
 ) {
   todo!()
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_debuggingBall(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  x: jint,
+  y: jint,
+  z: jint,
+) -> jlong {
+  let index = Scene::with_scene_mut(world_id as usize, |xs| {
+    let ball = ColliderBuilder::ball(1.0).restitution(1.0).build();
+    let ball_rb = RigidBodyBuilder::new(rapier3d::prelude::RigidBodyType::Dynamic)
+      .translation(Vec3::new(x as Real, y as Real, z as Real))
+      .build();
+
+    xs.collider_set.iter_enabled().for_each(|(_, x)| {
+      log::info!("{x:#?}");
+    });
+    xs.collider_set.insert_with_parent(
+      ball,
+      xs.rigid_body_set.insert(ball_rb),
+      &mut xs.rigid_body_set,
+    )
+  });
+  let index = index.unwrap().0;
+  unsafe { mem::transmute(index) }
 }
 
 #[unsafe(no_mangle)]

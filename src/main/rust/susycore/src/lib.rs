@@ -4,6 +4,7 @@ pub mod logger;
 pub mod octree;
 pub mod scene;
 
+use std::env;
 use std::time::Instant;
 
 use jni::errors::{Error, ThrowRuntimeExAndDefault};

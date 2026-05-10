@@ -712,7 +712,7 @@ public class SuSyMetaTileEntities {
                 new MetaTileEntityBlueprintAssembler(susyId("blueprint_assembler")));
         REDSTONE_CONTROLLER = registerMetaTileEntity(18062,
                 new MetaTileEntityComponentRedstoneController(susyId("redstone_controller")));
-        TEST = registerMetaTileEntity(18063,new TestingMTE(susyId("testing_mte")));
+        TEST = registerMetaTileEntity(18063, new TestingMTE(susyId("testing_mte")));
 
         INJECTION_MOLDER = registerMetaTileEntity(18110, new MetaTileEntityInjectionMolder(susyId("injection_molder")));
 

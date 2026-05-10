@@ -1,4 +1,4 @@
-const RESIZE_FRACTION: f32 = 1.5;
+const RESIZE_FRACTION: f32 = 2.0;
 //octree mostly stolen from sable
 pub struct Octree {
   pub data: Vec<i32>,
@@ -9,8 +9,10 @@ pub struct Octree {
 
 impl Octree {
   pub fn new(log2_size: u32) -> Self {
+    // worst-case capacity for a fully-dense octree at this depth
+    let capacity = ((8usize.pow(log2_size) - 1) / 7).max(1024);
     Self {
-      data: vec![0; 256],
+      data: vec![0; capacity],
       log2_size,
       size: 1,
       free_space_index_head: -1,
