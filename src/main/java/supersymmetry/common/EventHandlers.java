@@ -18,6 +18,7 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.event.entity.living.LivingFallEvent;
 import net.minecraftforge.event.world.BlockEvent;
+import net.minecraftforge.event.world.ChunkEvent;
 import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.EventPriority;
@@ -36,6 +37,7 @@ import gregtechfoodoption.item.GTFOMetaItem;
 import supersymmetry.Supersymmetry;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.items.CargoItemStackHandler;
+import supersymmetry.api.phys.Rapier;
 import supersymmetry.common.entities.EntityDropPod;
 import supersymmetry.common.entities.EntityLander;
 import supersymmetry.common.event.DimensionBreathabilityHandler;
@@ -87,6 +89,11 @@ public class EventHandlers {
     public static void onWorldLoad(WorldEvent.Load event) {
         GameRules gameRules = event.getWorld().getGameRules();
 
+        World world = event.getWorld();
+        if (!world.isRemote) {
+            Rapier.initialize_world(world, -10.0f, 0.0);
+        }
+
         if (!gameRules.hasRule("doInvasions")) {
             gameRules.addGameRule("doInvasions", "true", GameRules.ValueType.BOOLEAN_VALUE);
         }
@@ -102,6 +109,14 @@ public class EventHandlers {
     }
 
     @SubscribeEvent
+    public static void onChunkLoad(ChunkEvent.Load event) {
+        World world = event.getWorld();
+        if (!world.isRemote && Rapier.initializedWorlds.containsKey(world)) {
+            Rapier.handleChunkAddition(event.getChunk());
+        }
+    }
+
+    @SubscribeEvent
     public static void onWorldTick(TickEvent.WorldTickEvent event) {
         World world = event.world;
         if (world.isRemote || !(world instanceof WorldServer server)) {
@@ -114,7 +129,10 @@ public class EventHandlers {
         if (!travellingPassengers.isEmpty()) {
             handleEntityTransfer();
         }
-        if (event.phase != TickEvent.Phase.END) {
+
+        if (event.phase == TickEvent.Phase.END) {
+            Rapier.step_world(world);
+        } else {
             return;
         }
 

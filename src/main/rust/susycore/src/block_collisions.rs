@@ -8,7 +8,6 @@ use jni::objects::{JClass, JDoubleArray, JIntArray, JObjectArray};
 use jni::sys::{jdouble, jfloat, jint, jlong};
 use log::info;
 use ordered_float::OrderedFloat;
-use rapier3d::data::Index;
 use rapier3d::glamx::{Quat, usize};
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::Aabb;
@@ -26,7 +25,7 @@ pub struct ShapeCache(
 
 pub static SHAPE_CACHE: LazyLock<Mutex<ShapeCache>> =
   LazyLock::new(|| Mutex::new(ShapeCache::new()));
-pub static COLLIDERS: RwLock<Vec<MinecraftBlockColliderInfo>> = RwLock::new(Vec::new());
+pub static COLLIDERS: RwLock<ColliderStore> = RwLock::new(ColliderStore::new());
 pub const AIR_HANDLE: BlockColliderInfoHandle = BlockColliderInfoHandle(0);
 #[derive(Eq, PartialOrd, Ord, PartialEq, Hash, Copy, Clone)]
 pub struct BlockColliderInfoHandle(pub(crate) u32);
@@ -38,6 +37,42 @@ pub struct MinecraftBlockColliderInfo {
   pub density: Real,
   pub mass: Real,
   pub boxes: Vec<Aabb>,
+}
+
+pub struct ColliderStore {
+  inner: Vec<MinecraftBlockColliderInfo>,
+}
+
+impl ColliderStore {
+  pub const fn new() -> Self {
+    Self { inner: Vec::new() }
+  }
+
+  pub fn get(&self, handle: BlockColliderInfoHandle) -> Option<&MinecraftBlockColliderInfo> {
+    if handle.0 == 0 {
+      return None;
+    }
+    self.inner.get((handle.0 - 1) as usize)
+  }
+
+  pub fn find_or_insert(&mut self, info: MinecraftBlockColliderInfo) -> BlockColliderInfoHandle {
+    if let Some(pos) = self.inner.iter().position(|x| x == &info) {
+      return BlockColliderInfoHandle(pos as u32 + 1);
+    }
+    let index = self.inner.len();
+    self.inner.push(info);
+    let out = BlockColliderInfoHandle(index as u32 + 1);
+    debug_assert!(out != AIR_HANDLE);
+    out
+  }
+
+  pub fn len(&self) -> usize {
+    self.inner.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.inner.is_empty()
+  }
 }
 
 impl MinecraftBlockColliderInfo {
@@ -56,24 +91,11 @@ impl MinecraftBlockColliderInfo {
     f: impl FnOnce(&MinecraftBlockColliderInfo) -> T,
   ) -> Option<T> {
     let colliders = COLLIDERS.read().expect("rust bug not mine");
-    colliders
-      .get((h.0.overflowing_sub(1).0) as usize)
-      .map(|x| f(x))
+    colliders.get(h).map(|x| f(x))
   }
   pub fn handle(self) -> BlockColliderInfoHandle {
     let colliders = &mut *COLLIDERS.write().expect("rust bug not mine");
-    let index = colliders.len();
-    //TODO fix this
-    //this is a very bad thing to do because PartialEq for this is going to be expensive and
-    //not vectorized at all
-    if let Some(x) = colliders.iter().position(|x| x == &self) {
-      return BlockColliderInfoHandle(x as u32);
-    }
-    colliders.push(self);
-    let out = BlockColliderInfoHandle(index as u32 + 1);
-    //im going insane
-    debug_assert!(out != AIR_HANDLE);
-    out
+    colliders.find_or_insert(self)
   }
 
   //either a cuboid or a compound  shape, not for turning entire chunks into colliders but only a
@@ -163,14 +185,12 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
     (0..16) //.par_bridge()
       .for_each(|i| {
         if buffer[i].iter().all(|x| *x == 0) {
-          info!("buffer {i} is empty");
         } else {
           let b = buffer[i]
             .map(|x| x as u32)
             .map(|x| BlockColliderInfoHandle(x));
           let c = Chunklet::new_with_blockhandle(b);
           xs.add_chunklet(x, i as u8, z, c);
-          info!("shape built yay");
         }
       });
   });

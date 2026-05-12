@@ -19,6 +19,8 @@ import gregtech.client.renderer.ICubeRenderer;
 import gregtech.client.renderer.texture.Textures;
 import gregtech.common.blocks.BlockMetalCasing.MetalCasingType;
 import gregtech.common.blocks.MetaBlocks;
+import supersymmetry.api.phys.DebugCuboidEntity;
+import supersymmetry.api.phys.DebugSphereEntity;
 import supersymmetry.api.phys.Rapier;
 
 public class TestingMTE extends MultiblockWithDisplayBase {
@@ -62,8 +64,8 @@ public class TestingMTE extends MultiblockWithDisplayBase {
     protected ModularUI createUI(EntityPlayer entityPlayer) {
         return createUITemplate(entityPlayer).build(getHolder(), entityPlayer);
     }
-
-    private static long BallHandle = 0;
+    //
+    // private static long BallHandle = 0;
 
     protected ModularUI.Builder createUITemplate(EntityPlayer entityPlayer) {
         ModularUI.Builder builder = ModularUI.builder(GuiTextures.BACKGROUND, 198, 208);
@@ -87,20 +89,20 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                         (clickData -> {
                             Rapier.handleChunkAddition(this.getWorld().getChunk(this.getPos()));
                         })));
-        builder.widget(
-                new ClickButtonWidget(
-                        108,
-                        10,
-                        38,
-                        18,
-                        "ball",
-                        (clickData -> {
-                            BallHandle = Rapier.debugging_ball_w(
-                                    this.getWorld(),
-                                    this.getPos().getX(),
-                                    this.getPos().getY() + 100,
-                                    this.getPos().getZ());
-                        })));
+        // builder.widget(
+        // new ClickButtonWidget(
+        // 108,
+        // 10,
+        // 38,
+        // 18,
+        // "ball",
+        // (clickData -> {
+        // BallHandle = Rapier.debugging_ball_w(
+        // this.getWorld(),
+        // this.getPos().getX(),
+        // this.getPos().getY() + 100,
+        // this.getPos().getZ());
+        // })));
         builder.widget(
                 new ClickButtonWidget(
                         148,
@@ -109,8 +111,32 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                         18,
                         "step",
                         (clickData -> {
-                            Rapier.RbInfo(0, BallHandle);
+                            // Rapier.RbInfo(0, BallHandle);
                             Rapier.step_world(this.getWorld());
+                        })));
+        builder.widget(
+                new ClickButtonWidget(
+                        148,
+                        30,
+                        38,
+                        18,
+                        "sphere",
+                        (clickData -> {
+                            var entity = new DebugSphereEntity(this.getWorld());
+                            entity.setPosition(this.getPos().getX(), 100, this.getPos().getZ());
+                            this.getWorld().spawnEntity(entity);
+                        })));
+        builder.widget(
+                new ClickButtonWidget(
+                        148,
+                        50,
+                        38,
+                        18,
+                        "cuboid",
+                        (clickData -> {
+                            var entity = new DebugCuboidEntity(this.getWorld());
+                            entity.setPosition(this.getPos().getX(), 100, this.getPos().getZ());
+                            this.getWorld().spawnEntity(entity);
                         })));
 
         return builder;

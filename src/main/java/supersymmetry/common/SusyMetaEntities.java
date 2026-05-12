@@ -7,6 +7,10 @@ import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
 import supersymmetry.Supersymmetry;
+import supersymmetry.api.phys.CuboidEntityRender;
+import supersymmetry.api.phys.DebugCuboidEntity;
+import supersymmetry.api.phys.DebugSphereEntity;
+import supersymmetry.api.phys.SphereEntityRender;
 import supersymmetry.client.renderer.handler.LanderRenderer;
 import supersymmetry.client.renderer.handler.entity.DroneRenderer;
 import supersymmetry.client.renderer.handler.entity.DropPodRenderer;
@@ -26,6 +30,10 @@ public class SusyMetaEntities {
                 "Lander", 4, Supersymmetry.instance, 64, 3, true);
         EntityRegistry.registerModEntity(new ResourceLocation(Supersymmetry.MODID, "explosion"), EntityExplosion.class,
                 "Explosion", 5, Supersymmetry.instance, 64, 3, false);
+        EntityRegistry.registerModEntity(new ResourceLocation(Supersymmetry.MODID, "debug_sphere"),
+                DebugSphereEntity.class, "debug_sphere", 6, Supersymmetry.instance, 64, 3, false);
+        EntityRegistry.registerModEntity(new ResourceLocation(Supersymmetry.MODID, "debug_cuboid"),
+                DebugCuboidEntity.class, "debug_cuboid", 7, Supersymmetry.instance, 64, 3, false);
     }
 
     @SideOnly(Side.CLIENT)
@@ -34,5 +42,7 @@ public class SusyMetaEntities {
         RenderingRegistry.registerEntityRenderingHandler(EntityLander.class, LanderRenderer::new);
         RenderingRegistry.registerEntityRenderingHandler(EntityDrone.class, DroneRenderer::new);
         RenderingRegistry.registerEntityRenderingHandler(EntityRocket.class, RocketRenderer::new);
+        RenderingRegistry.registerEntityRenderingHandler(DebugSphereEntity.class, SphereEntityRender::new);
+        RenderingRegistry.registerEntityRenderingHandler(DebugCuboidEntity.class, CuboidEntityRender::new);
     }
 }

@@ -1,5 +1,6 @@
 pub mod block_collisions;
 pub mod chunklet;
+pub mod dispatcher;
 pub mod logger;
 pub mod octree;
 pub mod scene;
@@ -9,10 +10,13 @@ use std::time::Instant;
 
 use jni::errors::{Error, ThrowRuntimeExAndDefault};
 use jni::{EnvUnowned, objects::JClass};
+use rapier3d::na::Vector3;
 
 use self::logger::SusycoreJavaLogger;
 
+pub type IVec3 = Vector3<i32>;
 pub type Real = rapier3d::math::Real;
+pub type JResult<T> = Result<T, jni::errors::Error>;
 
 fn goog() {
   let now = Instant::now();

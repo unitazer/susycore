@@ -3,6 +3,7 @@ package supersymmetry.api.phys;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Optional;
 
 import net.minecraft.block.Block;
 import net.minecraft.block.material.Material;
@@ -10,9 +11,12 @@ import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
+
+import com.mojang.realmsclient.util.Pair;
 
 import supersymmetry.api.SusyLog;
 
@@ -23,6 +27,9 @@ public class Rapier {
     // doesnt work well with TE's
     private static HashMap<IBlockState, Integer> blockStateCache = new HashMap<>();
     public static HashMap<World, Integer> initializedWorlds = new HashMap<>();
+    // to be passed to rust as a mutable array reference so that you could write rotation/position
+    // data to it
+    private static double[] cache = new double[32];
 
     // drag should be very low unless its somewhere in an endless ocean
     public static void initialize_world(World world, float gravity, double drag) {
@@ -130,9 +137,78 @@ public class Rapier {
                 String.format("handleChunkAddition took %.3f ms", (endTime - startTime) / 1000000f));
     }
 
-    private static native void initialize(int world_id, float gravity, double universal_drag);
+    public static long debugging_ball_w(World w, int x, int y, int z) {
+        var id = initializedWorlds.get(w);
+        if (id != null) {
+            return debuggingBall(id, x, y, z);
+        }
+        return 0;
+    }
 
     // stuff that deals with terrain specifically
+
+    public static void add_force_debug(AbstractPhysicsEntity entity, double fx, double fy, double fz) {
+        var world_id = initializedWorlds.get(entity.getEntityWorld());
+        if (world_id == null || !entity.getColliderId().isPresent()) {
+            return;
+        }
+        addForceDebug(world_id, entity.getColliderId().get(), fx, fy, fz);
+    }
+
+    public static native void RbInfo(
+                                     int world_id, long handle); // TODO api to get most of the collider struct in java
+
+    public static void step_world(World w) {
+        var id = initializedWorlds.get(w);
+        if (id != null) {
+            step(id);
+        }
+    }
+
+    public static Pair<Vec3d, Quaternion> get_entity_pose(AbstractPhysicsEntity entity) {
+        var world_id = initializedWorlds.get(entity.getEntityWorld());
+        // int world_id = 0;
+        getEntityPose(world_id, entity.getColliderId().get(), cache);
+        return Pair.of(
+                new Vec3d(cache[0], cache[1], cache[2]),
+                new Quaternion(cache[6], cache[3], cache[4], cache[5]));
+    }
+
+    public static Optional<Long> add_entity(AbstractPhysicsEntity entity) {
+        if (entity.getColliderId().isPresent()) {
+            SusyLog.logger.warn(
+                    "entity supplied to Rapier.add_entity already had a rapier collider handle");
+            return entity.getColliderId();
+        }
+        var world = entity.getEntityWorld();
+        var world_id = initializedWorlds.get(world);
+        if (world_id == null) {
+            // world_id = 0; // for testing
+            SusyLog.logger.warn("tried to initialize an entity into an uninitialized world");
+            entity.setDead();
+            return Optional.empty();
+        }
+        var shape = entity.getShape();
+        // if (shape.type() == null || shape.data() == null || shape.indices() == null) {
+        // SusyLog.logger.error("shape null fields: type={}, data={}, indices={}", shape.type() == null,
+        // shape.data() == null, shape.indices() == null);
+        // return Optional.empty();
+        // }
+
+        return Optional.of(
+                addEntity(
+                        world_id,
+                        shape.type().getValue(),
+                        0.0,
+                        0.0,
+                        entity.posX,
+                        entity.posY,
+                        entity.posZ,
+                        shape.data(),
+                        shape.indices()));
+    }
+
+    private static native void initialize(int world_id, float gravity, double universal_drag);
 
     // returns a handle
     // the aabbs double array must have n%6==0 elements
@@ -160,22 +236,20 @@ public class Rapier {
 
     private static native long debuggingBall(int world_id, int x, int y, int z);
 
-    public static long debugging_ball_w(World w, int x, int y, int z) {
-        var id = initializedWorlds.get(w);
-        if (id != null) {
-            return debuggingBall(id, x, y, z);
-        }
-        return 0;
-    }
-
     private static native void step(int world_id);
 
-    public static native void RbInfo(int world_id, long handle);// TODO api to get most of the collider struct in java
+    private static native long addEntity(
+                                         int world_id,
+                                         int type,
+                                         double restitution,
+                                         double friction,
+                                         double x,
+                                         double y,
+                                         double z,
+                                         float[] shapeData,
+                                         int[] shapeIndicies);
 
-    public static void step_world(World w) {
-        var id = initializedWorlds.get(w);
-        if (id != null) {
-            step(id);
-        }
-    }
+    private static native void getEntityPose(int world_id, long collider_handle, double[] mut_array);
+
+    private static native void addForceDebug(int world_id, long collider_handle, double fx, double fy, double fz);
 }

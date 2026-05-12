@@ -171,7 +171,7 @@ impl Chunklet {
     let [maxx, maxy, maxz] = max;
     let bounds = Aabb::new(
       Vec3::new(minx as f32, miny as f32, minz as f32),
-      Vec3::new(maxx as f32, maxy as f32, maxz as f32),
+      Vec3::new((maxx + 1) as f32, (maxy + 1) as f32, (maxz + 1) as f32),
     );
 
     Self {
@@ -181,8 +181,12 @@ impl Chunklet {
     }
   }
   #[inline(always)]
-  pub fn get(&self, x: u8, y: u8, z: u8) -> &BlockHandle {
-    &self.blocks[Self::index(x, y, z) as usize]
+  pub fn get(&self, x: u8, y: u8, z: u8) -> BlockColliderInfoHandle {
+    BlockColliderInfoHandle(
+      self.blocks[Self::index(x, y, z) as usize]
+        .map(|x| x.get())
+        .unwrap_or(0),
+    )
   }
   #[inline(always)]
   fn index(x: u8, y: u8, z: u8) -> u16 {
@@ -227,7 +231,7 @@ impl Shape for Chunklet {
       .map(|(i, block)| {
         let (x, y, z) = Self::index_decode(i as u16);
         let pose1 = Pose::translation(x as f32, y as f32, z as f32);
-        let block = block.map(|x| lock.get(x.get() as usize)).flatten();
+        let block = block.and_then(|x| lock.get(BlockColliderInfoHandle(x.get())));
         (pose1, block)
       })
       .filter(|x| x.1.is_some())
@@ -275,133 +279,136 @@ impl RayCast for Chunklet {
   }
 }
 impl PointQuery for Chunklet {
-  fn project_local_point(&self, pt: Vec3, solid: bool) -> PointProjection {
-    let mut best_sq_dist = Real::MAX;
-    let mut best = PointProjection::new(false, pt);
-
-    let mut stack: Vec<(usize, u8, u8, u8, u32)> = Vec::new();
-    stack.push((self.tree.root_index(), 0, 0, 0, CHUNK_SIDE_LOG2 as u32));
-
-    while let Some((node, cx, cy, cz, log2_sz)) = stack.pop() {
-      if self.tree.is_empty(node) {
-        continue;
-      }
-
-      if self.tree.is_leaf(node) {
-        let aabb = Aabb::new(
-          Vec3::new(cx as f32, cy as f32, cz as f32),
-          Vec3::new(cx as f32 + 1.0, cy as f32 + 1.0, cz as f32 + 1.0),
-        );
-        let proj = aabb.project_local_point(pt, solid);
-        let d2 = (proj.point - pt).length_squared();
-        if d2 < best_sq_dist {
-          best_sq_dist = d2;
-          best = proj;
-          if best_sq_dist == 0.0 {
-            break;
-          }
-        }
-      } else if self.tree.is_branch(node) {
-        let child_log2 = log2_sz - 1;
-        let step = 1 << child_log2;
-
-        for octant in 0..8 {
-          let child = self.tree.child_index(node, octant);
-          if self.tree.is_empty(child) {
-            continue;
-          }
-
-          let child_cx = cx + ((octant & 1) as u8) * step;
-          let child_cy = cy + (((octant >> 1) & 1) as u8) * step;
-          let child_cz = cz + (((octant >> 2) & 1) as u8) * step;
-
-          if child_log2 == 0 {
-            stack.push((child, child_cx, child_cy, child_cz, child_log2));
-          } else {
-            let sz = step as f32;
-            let child_aabb = Aabb::new(
-              Vec3::new(child_cx as f32, child_cy as f32, child_cz as f32),
-              Vec3::new(
-                child_cx as f32 + sz,
-                child_cy as f32 + sz,
-                child_cz as f32 + sz,
-              ),
-            );
-            let d2 = child_aabb.distance_to_local_point(pt, true);
-            if d2 * d2 < best_sq_dist {
-              stack.push((child, child_cx, child_cy, child_cz, child_log2));
-            }
-          }
-        }
-      }
-    }
-
-    best
+  fn project_local_point(&self, _pt: Vec3, _solid: bool) -> PointProjection {
+    todo!()
+    // let mut best_sq_dist = Real::MAX;
+    // let mut best = PointProjection::new(false, pt);
+    //
+    // let mut stack: Vec<(usize, u8, u8, u8, u32)> = Vec::new();
+    // stack.push((self.tree.root_index(), 0, 0, 0, CHUNK_SIDE_LOG2 as u32));
+    //
+    // while let Some((node, cx, cy, cz, log2_sz)) = stack.pop() {
+    //   if self.tree.is_empty(node) {
+    //     continue;
+    //   }
+    //
+    //   if self.tree.is_leaf(node) {
+    //     let aabb = Aabb::new(
+    //       Vec3::new(cx as f32, cy as f32, cz as f32),
+    //       Vec3::new(cx as f32 + 1.0, cy as f32 + 1.0, cz as f32 + 1.0),
+    //     );
+    //     let proj = aabb.project_local_point(pt, solid);
+    //     let d2 = (proj.point - pt).length_squared();
+    //     if d2 < best_sq_dist {
+    //       best_sq_dist = d2;
+    //       best = proj;
+    //       if best_sq_dist == 0.0 {
+    //         break;
+    //       }
+    //     }
+    //   } else if self.tree.is_branch(node) {
+    //     let child_log2 = log2_sz - 1;
+    //     let step = 1 << child_log2;
+    //
+    //     for octant in 0..8 {
+    //       let child = self.tree.child_index(node, octant);
+    //       if self.tree.is_empty(child) {
+    //         continue;
+    //       }
+    //
+    //       let child_cx = cx + ((octant & 1) as u8) * step;
+    //       let child_cy = cy + (((octant >> 1) & 1) as u8) * step;
+    //       let child_cz = cz + (((octant >> 2) & 1) as u8) * step;
+    //
+    //       if child_log2 == 0 {
+    //         stack.push((child, child_cx, child_cy, child_cz, child_log2));
+    //       } else {
+    //         let sz = step as f32;
+    //         let child_aabb = Aabb::new(
+    //           Vec3::new(child_cx as f32, child_cy as f32, child_cz as f32),
+    //           Vec3::new(
+    //             child_cx as f32 + sz,
+    //             child_cy as f32 + sz,
+    //             child_cz as f32 + sz,
+    //           ),
+    //         );
+    //         let d2 = child_aabb.distance_to_local_point(pt, true);
+    //         if d2 * d2 < best_sq_dist {
+    //           stack.push((child, child_cx, child_cy, child_cz, child_log2));
+    //         }
+    //       }
+    //     }
+    //   }
+    // }
+    //
+    // best
   }
 
-  fn project_local_point_and_get_feature(&self, pt: Vec3) -> (PointProjection, FeatureId) {
-    let mut best_sq_dist = Real::MAX;
-    let mut best = PointProjection::new(false, pt);
-    let mut best_voxel = 0u16;
-
-    let mut stack: Vec<(usize, u8, u8, u8, u32)> = Vec::new();
-    stack.push((self.tree.root_index(), 0, 0, 0, CHUNK_SIDE_LOG2 as u32));
-
-    while let Some((node, cx, cy, cz, log2_sz)) = stack.pop() {
-      if self.tree.is_empty(node) {
-        continue;
-      }
-
-      if self.tree.is_leaf(node) {
-        let aabb = Aabb::new(
-          Vec3::new(cx as f32, cy as f32, cz as f32),
-          Vec3::new(cx as f32 + 1.0, cy as f32 + 1.0, cz as f32 + 1.0),
-        );
-        let proj = aabb.project_local_point(pt, false);
-        let d2 = (proj.point - pt).length_squared();
-        if d2 < best_sq_dist {
-          best_sq_dist = d2;
-          best = proj;
-          best_voxel = Self::index(cx, cy, cz);
-          if best_sq_dist == 0.0 {
-            break;
-          }
-        }
-      } else if self.tree.is_branch(node) {
-        let child_log2 = log2_sz - 1;
-        let step = 1 << child_log2;
-
-        for octant in 0..8 {
-          let child = self.tree.child_index(node, octant);
-          if self.tree.is_empty(child) {
-            continue;
-          }
-
-          let child_cx = cx + ((octant & 1) as u8) * step;
-          let child_cy = cy + (((octant >> 1) & 1) as u8) * step;
-          let child_cz = cz + (((octant >> 2) & 1) as u8) * step;
-
-          if child_log2 == 0 {
-            stack.push((child, child_cx, child_cy, child_cz, child_log2));
-          } else {
-            let sz = step as f32;
-            let child_aabb = Aabb::new(
-              Vec3::new(child_cx as f32, child_cy as f32, child_cz as f32),
-              Vec3::new(
-                child_cx as f32 + sz,
-                child_cy as f32 + sz,
-                child_cz as f32 + sz,
-              ),
-            );
-            let d2 = child_aabb.distance_to_local_point(pt, true);
-            if d2 * d2 < best_sq_dist {
-              stack.push((child, child_cx, child_cy, child_cz, child_log2));
-            }
-          }
-        }
-      }
-    }
-
-    (best, FeatureId::Face(best_voxel as u32))
+  fn project_local_point_and_get_feature(&self, _pt: Vec3) -> (PointProjection, FeatureId) {
+    //   let mut best_sq_dist = Real::MAX;
+    //   let mut best = PointProjection::new(false, pt);
+    //   let mut best_voxel = 0u16;
+    //
+    //   let mut stack: Vec<(usize, u8, u8, u8, u32)> = Vec::new();
+    //   stack.push((self.tree.root_index(), 0, 0, 0, CHUNK_SIDE_LOG2 as u32));
+    //
+    //   while let Some((node, cx, cy, cz, log2_sz)) = stack.pop() {
+    //     if self.tree.is_empty(node) {
+    //       continue;
+    //     }
+    //
+    //     if self.tree.is_leaf(node) {
+    //       let aabb = Aabb::new(
+    //         Vec3::new(cx as f32, cy as f32, cz as f32),
+    //         Vec3::new(cx as f32 + 1.0, cy as f32 + 1.0, cz as f32 + 1.0),
+    //       );
+    //       let proj = aabb.project_local_point(pt, false);
+    //       let d2 = (proj.point - pt).length_squared();
+    //       if d2 < best_sq_dist {
+    //         best_sq_dist = d2;
+    //         best = proj;
+    //         best_voxel = Self::index(cx, cy, cz);
+    //         if best_sq_dist == 0.0 {
+    //           break;
+    //         }
+    //       }
+    //     } else if self.tree.is_branch(node) {
+    //       let child_log2 = log2_sz - 1;
+    //       let step = 1 << child_log2;
+    //
+    //       for octant in 0..8 {
+    //         let child = self.tree.child_index(node, octant);
+    //         if self.tree.is_empty(child) {
+    //           continue;
+    //         }
+    //
+    //         let child_cx = cx + ((octant & 1) as u8) * step;
+    //         let child_cy = cy + (((octant >> 1) & 1) as u8) * step;
+    //         let child_cz = cz + (((octant >> 2) & 1) as u8) * step;
+    //
+    //         if child_log2 == 0 {
+    //           stack.push((child, child_cx, child_cy, child_cz, child_log2));
+    //         } else {
+    //           let sz = step as f32;
+    //           let child_aabb = Aabb::new(
+    //             Vec3::new(child_cx as f32, child_cy as f32, child_cz as f32),
+    //             Vec3::new(
+    //               child_cx as f32 + sz,
+    //               child_cy as f32 + sz,
+    //               child_cz as f32 + sz,
+    //             ),
+    //           );
+    //           let d2 = child_aabb.distance_to_local_point(pt, true);
+    //           if d2 * d2 < best_sq_dist {
+    //             stack.push((child, child_cx, child_cy, child_cz, child_log2));
+    //           }
+    //         }
+    //       }
+    //     }
+    //   }
+    //
+    //   (best, FeatureId::Face(best_voxel as u32))
+    // }
+    todo!()
   }
 }
