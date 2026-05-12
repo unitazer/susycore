@@ -31,7 +31,7 @@ public class SphereEntityRender extends Render<DebugSphereEntity> {
         GlStateManager.disableLighting();
         GlStateManager.enableBlend();
         GlStateManager.blendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
-        GlStateManager.color(0.5f, 0.5f, 0.5f, 0.9f);
+        GlStateManager.color(1f, 0.447f, 0.015f, 1f);
         Tessellator tess = Tessellator.getInstance();
         BufferBuilder buf = tess.getBuffer();
         buf.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION);
