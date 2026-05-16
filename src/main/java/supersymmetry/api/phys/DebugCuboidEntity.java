@@ -10,6 +10,10 @@ public class DebugCuboidEntity extends AbstractPhysicsEntity {
         super(w, new Cuboid(3, 3, 3));
     }
 
+    public DebugCuboidEntity(World w, int x, int y, int z) {
+        super(w, new Cuboid(x, y, z));
+    }
+
     @Override
     public boolean attackEntityFrom(DamageSource source, float amount) {
         if (!this.world.isRemote && this.getColliderId().isPresent()) {

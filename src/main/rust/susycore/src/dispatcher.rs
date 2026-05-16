@@ -1,3 +1,8 @@
+use std::time::Instant;
+
+use itertools::Itertools;
+use jni::sys::jdouble;
+use jni::{JValue, jni_sig, jni_str};
 use log::info;
 use rapier3d::math::Vec3;
 use rapier3d::parry::query::details::NormalConstraints;
@@ -6,11 +11,11 @@ use rapier3d::parry::query::{
   NonlinearRigidMotion, PersistentQueryDispatcher, QueryDispatcher, ShapeCastHit, ShapeCastOptions,
   Unsupported,
 };
-use rapier3d::prelude::{ContactData, ContactManifoldData, Cuboid, Pose, Shape, ShapeType};
+use rapier3d::prelude::{Aabb, ContactData, ContactManifoldData, Cuboid, Pose, Shape, ShapeType};
 
 use crate::block_collisions::{self, COLLIDERS};
 use crate::chunklet::Chunklet;
-use crate::{IVec3, Real};
+use crate::{IVec3, JResult, Real, logger};
 
 pub struct ChunkletDispatcher;
 impl QueryDispatcher for ChunkletDispatcher {
@@ -102,6 +107,7 @@ impl PersistentQueryDispatcher<ContactManifoldData, ContactData> for ChunkletDis
         false,
       );
     } else if g1.shape_type() != ShapeType::Custom && g2.shape_type() == ShapeType::Custom {
+      let _now = Instant::now();
       manifolds_chunklet_shape(
         &pos12.inverse(),
         g2.downcast_ref()
@@ -111,6 +117,7 @@ impl PersistentQueryDispatcher<ContactManifoldData, ContactData> for ChunkletDis
         manifolds,
         true,
       );
+      // log::info!("manifolds took {:?}", now.elapsed());
     } else {
       todo!("g1:{:?}, g2:{:?}", g1.shape_type(), g2.shape_type());
     }
@@ -139,7 +146,7 @@ fn manifolds_chunklet_shape(
   swap: bool, // scene:&Scene
 ) {
   let shape_aabb = g2.compute_aabb(pos12);
-  let shape_aabb = shape_aabb.add_half_extents(Vec3::splat(prediction + 0.05));
+  let shape_aabb = shape_aabb.add_half_extents(Vec3::splat(prediction + 0.001));
   let (mins, maxs) = {
     let mins = shape_aabb.mins;
     let maxs = shape_aabb.maxs;
@@ -159,6 +166,8 @@ fn manifolds_chunklet_shape(
   let mut manifold_index = 0;
 
   let colliders = &*COLLIDERS.read().unwrap();
+  #[allow(unused)]
+  let entity_half_extents = g2.compute_aabb(&Pose::identity()).half_extents();
   for y in mins.y..=maxs.y {
     for z in mins.z..=maxs.z {
       for x in mins.x..=maxs.x {
@@ -168,14 +177,37 @@ fn manifolds_chunklet_shape(
         }
         if let Some(block_collider) = colliders.get(handle) {
           for aabb in block_collider.boxes.iter() {
-            if manifolds.len() <= manifold_index {
-              manifolds.push(ContactManifold::new());
-            }
-
             let center = aabb.center() + Vec3::new(x as Real, y as Real, z as Real);
             let half_extents = aabb.half_extents();
             let mut block_isometry = *pos12;
             block_isometry.translation -= center;
+            //TODO check if this actually does anything good with a benchmark
+            #[cfg(not(debug_assertions))]
+            {
+              let sphere_center_in_obb =
+                block_isometry.rotation.inverse() * -block_isometry.translation;
+              let clamped = sphere_center_in_obb.clamp(-entity_half_extents, entity_half_extents);
+              let dist =
+                (sphere_center_in_obb - clamped).length() - aabb.bounding_sphere().radius();
+              if dist > prediction {
+                continue;
+              }
+            }
+
+            if manifolds.len() <= manifold_index {
+              manifolds.push(ContactManifold::new());
+            }
+
+            {
+              let world_offset = Vec3::new(
+                g1.cx as Real * 16.0,
+                g1.cy as Real * 16.0,
+                g1.cz as Real * 16.0,
+              );
+              add_box_java(
+                aabb.translated(Vec3::new(x as Real, y as Real, z as Real) + world_offset),
+              );
+            }
             if !swap {
               DefaultQueryDispatcher
                 .contact_manifold_convex_convex(
@@ -217,5 +249,63 @@ fn manifolds_chunklet_shape(
   }
   if manifolds.len() > manifold_index {
     manifolds.truncate(manifold_index);
+  }
+  // log::info!(
+  //   "{} manifolds area covered: {:?} -> {:?} ({} blocks)",
+  //   manifolds.len(),
+  //   mins,
+  //   maxs,
+  //   (maxs - mins).product()
+  // );
+}
+
+// TODO remove/feature flag it
+fn add_box_java(aabb: Aabb) {
+  let jvm = logger::JVM.lock().unwrap();
+  if let Some(jvm) = jvm.as_ref() {
+    jvm
+      .attach_current_thread(|env| -> JResult<()> {
+        let class = env
+          .find_class(jni_str!(
+            "supersymmetry/client/renderer/handler/PhysicsDebugRenderer"
+          ))
+          .unwrap();
+        let args: [JValue; 6] = [aabb.mins, aabb.maxs]
+          .iter()
+          .map(|x| {
+            let mut buf = [0.0; 3];
+            x.write_to_slice(&mut buf);
+            buf
+          })
+          .flat_map(|x| x.map(|y| y as jdouble))
+          .map(|x| JValue::from(x))
+          .collect_array()
+          .unwrap();
+        env
+          .call_static_method(class, jni_str!("add_box"), jni_sig!("(DDDDDD)V"), &args)
+          .unwrap();
+
+        Ok(())
+      })
+      .unwrap();
+  }
+}
+pub fn clear_boxes_java() {
+  let jvm = logger::JVM.lock().unwrap();
+  if let Some(jvm) = jvm.as_ref() {
+    jvm
+      .attach_current_thread(|env| -> JResult<()> {
+        let class = env
+          .find_class(jni_str!(
+            "supersymmetry/client/renderer/handler/PhysicsDebugRenderer"
+          ))
+          .unwrap();
+        env
+          .call_static_method(class, jni_str!("clear_boxes"), jni_sig!(sig = ()), &[])
+          .unwrap();
+
+        Ok(())
+      })
+      .unwrap();
   }
 }

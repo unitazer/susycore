@@ -4,7 +4,7 @@ use std::mem::{self};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use jni::EnvUnowned;
-use jni::objects::{JClass, JDoubleArray, JIntArray, JObjectArray};
+use jni::objects::{JClass, JDoubleArray, JIntArray};
 use jni::sys::{jdouble, jfloat, jint, jlong};
 use log::info;
 use ordered_float::OrderedFloat;
@@ -12,7 +12,7 @@ use rapier3d::glamx::{Quat, usize};
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::Aabb;
 use rapier3d::parry::shape::Cuboid;
-use rapier3d::prelude::{Collider, ColliderBuilder, ColliderHandle, RigidBodyBuilder, SharedShape};
+use rapier3d::prelude::{Collider, ColliderBuilder, ColliderHandle, SharedShape};
 
 use crate::Real;
 use crate::chunklet::Chunklet;
@@ -161,39 +161,46 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
   _class: JClass,
   world_id: jint,
   x: jint,
+  y: jint,
   z: jint,
-  data: JObjectArray,
+  data: JIntArray,
 ) {
-  let mut buffer: [[i32; 4096]; 16] = [[0; 4096]; 16];
+  debug_assert!(y >= 0 && y <= 16, "xyz: {x} {y} {z}");
+  // let mut buffer: [[i32; 4096]; 16] = [[0; 4096]; 16];
+  let mut buffer: [i32; 4096] = [0; 4096];
   env
     .with_env(|env| -> Result<(), jni::errors::Error> {
-      debug_assert!(data.len(env)? == 16);
-      for i in 0..16 {
-        let arr: jni::objects::JObject<'_> = data.get_element(env, i)?;
-        let arr = JIntArray::cast_local(env, arr)?;
-        arr.get_region(env, 0, &mut buffer[i])?;
-      }
+      debug_assert!(data.len(env)? == 4096);
+      data.get_region(env, 0, &mut buffer)?;
       Ok(())
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
-  debug_assert!(!buffer.iter().flatten().all(|x| *x == 0));
   info!(
-    "addChunk: world={}, chunk=({}, {}), data received",
-    world_id, x, z
+    "addChunk: world={}, subchunk=({}, {}, {})",
+    world_id, x, y, z
   );
-  let _world = Scene::with_scene_mut(0, |xs| {
-    (0..16) //.par_bridge()
-      .for_each(|i| {
-        if buffer[i].iter().all(|x| *x == 0) {
-        } else {
-          let b = buffer[i]
-            .map(|x| x as u32)
-            .map(|x| BlockColliderInfoHandle(x));
-          let c = Chunklet::new_with_blockhandle(b);
-          xs.add_chunklet(x, i as u8, z, c);
-        }
-      });
+  if buffer.iter().all(|x| *x == 0) {
+    log::error!("empty subchunk supplied, shouldve been filtered out");
+    return;
+  }
+  Scene::with_scene_mut(world_id as usize, |xs| {
+    let b = buffer.map(|x| x as u32).map(|x| BlockColliderInfoHandle(x));
+    let c = Chunklet::new_with_blockhandle(x, y, z, b);
+    xs.add_chunklet(x, y as u8, z, c);
   });
+  // let _world = Scene::with_scene_mut(0, |xs| {
+  //   (0..16) //.par_bridge()
+  //     .for_each(|i| {
+  //       if buffer[i].iter().all(|x| *x == 0) {
+  //       } else {
+  //         let b = buffer[i]
+  //           .map(|x| x as u32)
+  //           .map(|x| BlockColliderInfoHandle(x));
+  //         let c = Chunklet::new_with_blockhandle(b);
+  //         xs.add_chunklet(x, i as u8, z, c);
+  //       }
+  //     });
+  // });
 }
 
 #[unsafe(no_mangle)]
@@ -291,38 +298,22 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunk(
   _env: EnvUnowned,
   _class: JClass,
-  _dimension: jint,
-  _x: jint,
-  _z: jint,
-) {
-  todo!()
-}
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_supersymmetry_api_phys_Rapier_debuggingBall(
-  _env: EnvUnowned,
-  _class: JClass,
   world_id: jint,
   x: jint,
   y: jint,
   z: jint,
-) -> jlong {
-  let index = Scene::with_scene_mut(world_id as usize, |xs| {
-    let ball = ColliderBuilder::ball(1.0).restitution(1.0).build();
-    let ball_rb = RigidBodyBuilder::new(rapier3d::prelude::RigidBodyType::Dynamic)
-      .translation(Vec3::new(x as Real, y as Real, z as Real))
-      .build();
-
-    xs.collider_set.iter_enabled().for_each(|(_, x)| {
-      log::info!("{x:#?}");
-    });
-    xs.collider_set.insert_with_parent(
-      ball,
-      xs.rigid_body_set.insert(ball_rb),
+) {
+  debug_assert!(y >= 0 && y <= 16, "removeChunk: xyz=({}, {}, {})", x, y, z);
+  Scene::with_scene_mut(world_id as usize, |xs| {
+    xs.terrain.remove(
+      x,
+      y as u8,
+      z,
+      &mut xs.collider_set,
+      &mut xs.island_manager,
       &mut xs.rigid_body_set,
-    )
+    );
   });
-  let index = index.unwrap().0;
-  unsafe { mem::transmute(index) }
 }
 
 #[unsafe(no_mangle)]

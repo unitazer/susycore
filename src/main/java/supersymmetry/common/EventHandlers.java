@@ -1,7 +1,9 @@
 package supersymmetry.common;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockTorch;
@@ -18,7 +20,6 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.event.entity.living.LivingFallEvent;
 import net.minecraftforge.event.world.BlockEvent;
-import net.minecraftforge.event.world.ChunkEvent;
 import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.EventPriority;
@@ -37,6 +38,7 @@ import gregtechfoodoption.item.GTFOMetaItem;
 import supersymmetry.Supersymmetry;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.items.CargoItemStackHandler;
+import supersymmetry.api.phys.ChunkSyncManager;
 import supersymmetry.api.phys.Rapier;
 import supersymmetry.common.entities.EntityDropPod;
 import supersymmetry.common.entities.EntityLander;
@@ -54,6 +56,7 @@ public class EventHandlers {
 
     public static final String FIRST_SPAWN = Supersymmetry.MODID + ".first_spawn";
     public static List<DimensionRidingSwapData> travellingPassengers = new ArrayList<>();
+    public static Map<WorldServer, ChunkSyncManager> chunkSyncManagers = new HashMap<>();
 
     @SubscribeEvent
     public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
@@ -92,6 +95,7 @@ public class EventHandlers {
         World world = event.getWorld();
         if (!world.isRemote) {
             Rapier.initialize_world(world, -10.0f, 0.0);
+            chunkSyncManagers.put((WorldServer) world, new ChunkSyncManager((WorldServer) world));
         }
 
         if (!gameRules.hasRule("doInvasions")) {
@@ -109,14 +113,6 @@ public class EventHandlers {
     }
 
     @SubscribeEvent
-    public static void onChunkLoad(ChunkEvent.Load event) {
-        World world = event.getWorld();
-        if (!world.isRemote && Rapier.initializedWorlds.containsKey(world)) {
-            Rapier.handleChunkAddition(event.getChunk());
-        }
-    }
-
-    @SubscribeEvent
     public static void onWorldTick(TickEvent.WorldTickEvent event) {
         World world = event.world;
         if (world.isRemote || !(world instanceof WorldServer server)) {
@@ -131,7 +127,15 @@ public class EventHandlers {
         }
 
         if (event.phase == TickEvent.Phase.END) {
+            long start = System.nanoTime();
+            ChunkSyncManager csm = chunkSyncManagers.get(world);
+            csm.update();
             Rapier.step_world(world);
+            csm.update();
+            double dt = (System.nanoTime() - start) / 1000000.0;
+            if (dt > 10) {
+                SusyLog.logger.warn(String.format("pstep took %.3f ms", dt));
+            }
         } else {
             return;
         }

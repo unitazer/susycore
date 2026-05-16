@@ -11,6 +11,7 @@ import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.BlockPos.PooledMutableBlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
@@ -25,11 +26,13 @@ public class Rapier {
     // IBlockState -> collision data handle
     // ideally this would hash the coords aswell but thats probably too much
     // doesnt work well with TE's
-    private static HashMap<IBlockState, Integer> blockStateCache = new HashMap<>();
+    static HashMap<IBlockState, Integer> blockStateCache = new HashMap<>();
     public static HashMap<World, Integer> initializedWorlds = new HashMap<>();
     // to be passed to rust as a mutable array reference so that you could write rotation/position
     // data to it
     private static double[] cache = new double[32];
+
+    public static ArrayList<AbstractPhysicsEntity> entities = new ArrayList<>();
 
     // drag should be very low unless its somewhere in an endless ocean
     public static void initialize_world(World world, float gravity, double drag) {
@@ -42,7 +45,6 @@ public class Rapier {
     }
 
     public static void handleChunkAddition(Chunk chunk) {
-        // TODO maybe keep this outside of the function?
         AxisAlignedBB chunk_box = new AxisAlignedBB(BlockPos.ORIGIN, new BlockPos(16, 256, 16))
                 .offset(chunk.x * 16, 0, chunk.z * 16);
 
@@ -51,23 +53,41 @@ public class Rapier {
             SusyLog.logger.error("handleChunkAddition on a chunk from an uninitialized world");
             return;
         }
-        // TODo maybe keep this outside of the function?
+
         List<AxisAlignedBB> aabb_tmp = new ArrayList<>();
 
         long startTime = System.nanoTime();
-        int[][] chunkdata = new int[16][4096];
 
-        var pos = BlockPos.PooledMutableBlockPos.retain();
+        PooledMutableBlockPos pos = BlockPos.PooledMutableBlockPos.retain();
 
+        Integer x = initializedWorlds.get(world);
         for (int i = 0; i < chunk.storageArrays.length; i++) {
-            ExtendedBlockStorage subchunk = chunk.storageArrays[i];
-            if (subchunk == null || subchunk.isEmpty()) {
-                continue;
-            }
-            int chunkBaseY = subchunk.getYLocation();
-            int[] subchunkColliderInfo = new int[4096];
+            handleSubchunkAddition(
+                    world, chunk, chunk_box, aabb_tmp, pos, chunk.storageArrays[i], i, x.intValue());
+        }
+        pos.release();
+
+        long endTime = System.nanoTime();
+
+        SusyLog.logger.info(
+                String.format("handleChunkAddition took %.3f ms", (endTime - startTime) / 1000000f));
+    }
+
+    public static void handleSubchunkAddition(
+                                              World world,
+                                              Chunk chunk,
+                                              AxisAlignedBB chunk_box,
+                                              List<AxisAlignedBB> aabb_tmp,
+                                              PooledMutableBlockPos pos,
+                                              ExtendedBlockStorage subchunk,
+                                              int yLevel,
+                                              int world_id) {
+        int[] subchunkColliderInfo = new int[4096];
+
+        if (subchunk != null && !subchunk.isEmpty()) {
             int chunkBaseX = chunk.x * 16;
             int chunkBaseZ = chunk.z * 16;
+            int chunkBaseY = subchunk.getYLocation();
             for (int ly = 0; ly < 16; ly++) {
                 for (int lz = 0; lz < 16; lz++) {
                     for (int lx = 0; lx < 16; lx++) {
@@ -86,7 +106,12 @@ public class Rapier {
                             continue;
                         }
                         if (blockstate1.getMaterial() == Material.WATER || blockstate1.getMaterial() == Material.LAVA) {
-                            continue; // not dealing with that yet
+                            continue;
+                        }
+                        // TODO
+                        // figure out if this is worth doing here or if its worth it to detect these on the rust side
+                        if (isOccluded(world, pos)) {
+                            continue;
                         }
 
                         int colliderInfoHandle = blockStateCache.computeIfAbsent(
@@ -97,6 +122,7 @@ public class Rapier {
                                             1);
                                     aabb_tmp.clear();
                                     blockstate.addCollisionBoxToList(world, pos, chunk_box, aabb_tmp, null, true);
+
                                     int size = aabb_tmp.size();
                                     if (size == 0) {
                                         return 0;
@@ -113,11 +139,7 @@ public class Rapier {
                                         box_data[j0 + 4] = box.maxY - worldY;
                                         box_data[j0 + 5] = box.maxZ - worldZ;
                                     }
-                                    // very slow because of the jni
-                                    int h = addColliderInfo(
-                                            friction, 0.9, // TODO
-                                            1000.0, // TODO
-                                            box_data);
+                                    int h = addColliderInfo(friction, 0.9, 1000.0, box_data);
                                     return h;
                                 });
                         int index = ly << 8 | lz << 4 | lx;
@@ -125,29 +147,13 @@ public class Rapier {
                     }
                 }
             }
-            chunkdata[i] = subchunkColliderInfo;
         }
-        pos.release();
-        var x = initializedWorlds.get(world);
-        addChunk(x.intValue(), chunk.x, chunk.z, chunkdata);
 
-        long endTime = System.nanoTime();
-
-        SusyLog.logger.info(
-                String.format("handleChunkAddition took %.3f ms", (endTime - startTime) / 1000000f));
+        addChunk(world_id, chunk.x, yLevel, chunk.z, subchunkColliderInfo);
     }
 
-    public static long debugging_ball_w(World w, int x, int y, int z) {
-        var id = initializedWorlds.get(w);
-        if (id != null) {
-            return debuggingBall(id, x, y, z);
-        }
-        return 0;
-    }
-
-    // stuff that deals with terrain specifically
-
-    public static void add_force_debug(AbstractPhysicsEntity entity, double fx, double fy, double fz) {
+    public static void add_force_debug(
+                                       AbstractPhysicsEntity entity, double fx, double fy, double fz) {
         var world_id = initializedWorlds.get(entity.getEntityWorld());
         if (world_id == null || !entity.getColliderId().isPresent()) {
             return;
@@ -167,11 +173,23 @@ public class Rapier {
 
     public static Pair<Vec3d, Quaternion> get_entity_pose(AbstractPhysicsEntity entity) {
         var world_id = initializedWorlds.get(entity.getEntityWorld());
-        // int world_id = 0;
+        if (world_id == null) return Pair.of(Vec3d.ZERO, Quaternion.IDENTITY);
         getEntityPose(world_id, entity.getColliderId().get(), cache);
         return Pair.of(
                 new Vec3d(cache[0], cache[1], cache[2]),
                 new Quaternion(cache[6], cache[3], cache[4], cache[5]));
+    }
+
+    public static void syncEntity(AbstractPhysicsEntity entity) {
+        if (!entity.getColliderId().isPresent()) return;
+        var world_id = initializedWorlds.get(entity.getEntityWorld());
+        if (world_id == null) return;
+        getEntityPose(world_id, entity.getColliderId().get(), cache);
+        entity.setPosition(cache[0], cache[1], cache[2]);
+        entity.rotation = new Quaternion(cache[6], cache[3], cache[4], cache[5]);
+        entity.motionX = cache[7];
+        entity.motionY = cache[8];
+        entity.motionZ = cache[9];
     }
 
     public static Optional<Long> add_entity(AbstractPhysicsEntity entity) {
@@ -195,37 +213,60 @@ public class Rapier {
         // return Optional.empty();
         // }
 
-        return Optional.of(
-                addEntity(
-                        world_id,
-                        shape.type().getValue(),
-                        0.0,
-                        0.0,
-                        entity.posX,
-                        entity.posY,
-                        entity.posZ,
-                        shape.data(),
-                        shape.indices()));
+        long handle = addEntity(
+                world_id,
+                shape.type().getValue(),
+                0.0,
+                0.0,
+                entity.posX,
+                entity.posY,
+                entity.posZ,
+                shape.data(),
+                shape.indices());
+        entities.add(entity);
+        return Optional.of(handle);
+    }
+
+    public static void remove_entity(AbstractPhysicsEntity entity) {
+        if (!entity.colliderId.isPresent()) return;
+        var world_id = initializedWorlds.get(entity.getEntityWorld());
+        if (world_id == null) return;
+        removeEntity(world_id, entity.colliderId.get());
+        entities.remove(entity);
+        entity.colliderId = Optional.empty();
     }
 
     private static native void initialize(int world_id, float gravity, double universal_drag);
 
     // returns a handle
     // the aabbs double array must have n%6==0 elements
-    private static native int addColliderInfo(
-                                              double friction, double restitution, double density, double[] aabbs);
+    static native int addColliderInfo(
+                                      double friction, double restitution, double density, double[] aabbs);
 
-    // xy chunk coordniates (chunk space)
+    // xyz chunk coordniates (chunk space)
     // [subchunk][xzy int handle] data
-    private static native void addChunk(int world_id, int x, int z, int[][] data);
+    static native void addChunk(int world_id, int x, int y, int z, int[] data);
 
-    // todo
-    private static native void removeChunk(int world_id, int x, int z);
+    // xyz chunk coordniates (chunk space), subchunk
+    static native void removeChunk(int world_id, int x, int y, int z);
 
     // todo
     private static native void partialSubchunkUpdate(
                                                      int world_id, int chunk_x, int chunk_z, int chunk_y, int x, int y,
                                                      int z, int new_data);
+
+    private static boolean isOccluded(World world, BlockPos pos) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        return isFullSolidBlock(world, x - 1, y, z) && isFullSolidBlock(world, x + 1, y, z) &&
+                isFullSolidBlock(world, x, y - 1, z) && isFullSolidBlock(world, x, y + 1, z) &&
+                isFullSolidBlock(world, x, y, z - 1) && isFullSolidBlock(world, x, y, z + 1);
+    }
+
+    private static boolean isFullSolidBlock(World world, int x, int y, int z) {
+        if (y < 0 || y >= 256) return false;
+        IBlockState state = world.getBlockState(new BlockPos(x, y, z));
+        return state.isFullBlock() && state.isFullCube() && state.isOpaqueCube();
+    }
 
     private static double volume(AxisAlignedBB aabb) {
         double x = aabb.maxX - aabb.minX;
@@ -237,6 +278,23 @@ public class Rapier {
     private static native long debuggingBall(int world_id, int x, int y, int z);
 
     private static native void step(int world_id);
+
+    public static void setEntityPose(AbstractPhysicsEntity entity) {
+        var world_id = initializedWorlds.get(entity.getEntityWorld());
+        if (world_id == null || !entity.getColliderId().isPresent()) return;
+        setEntityPose(world_id, entity.getColliderId().get(),
+                entity.posX, entity.posY, entity.posZ,
+                (float) entity.rotation.getW(), (float) entity.rotation.getX(),
+                (float) entity.rotation.getY(), (float) entity.rotation.getZ(),
+                entity.motionX, entity.motionY, entity.motionZ);
+    }
+
+    private static native void setEntityPose(int world_id, long collider_handle,
+                                             double x, double y, double z,
+                                             double qw, double qx, double qy, double qz,
+                                             double vx, double vy, double vz);
+
+    private static native void removeEntity(int world_id, long collider_handle);
 
     private static native long addEntity(
                                          int world_id,
@@ -251,5 +309,6 @@ public class Rapier {
 
     private static native void getEntityPose(int world_id, long collider_handle, double[] mut_array);
 
-    private static native void addForceDebug(int world_id, long collider_handle, double fx, double fy, double fz);
+    private static native void addForceDebug(
+                                             int world_id, long collider_handle, double fx, double fy, double fz);
 }

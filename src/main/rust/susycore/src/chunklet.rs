@@ -4,7 +4,8 @@ use rapier3d::parry::bounding_volume::{Aabb, BoundingSphere};
 use rapier3d::parry::query::{PointProjection, Ray, RayIntersection};
 use rapier3d::parry::shape::Cuboid;
 use rapier3d::prelude::{
-  ColliderHandle, FeatureId, MassProperties, PointQuery, RayCast, Shape, ShapeType, TypedShape,
+  ColliderBuilder, ColliderHandle, ColliderSet, FeatureId, IslandManager, MassProperties,
+  PointQuery, RayCast, RigidBodySet, Shape, ShapeType, SharedShape, TypedShape,
 };
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -73,19 +74,43 @@ impl TerrainData {
     x: i32,
     y: u8,
     z: i32,
-  ) -> (Option<Arc<Chunklet>>, Option<ColliderHandle>) {
+    colliders: &mut ColliderSet,
+    islands: &mut IslandManager,
+    bodies: &mut RigidBodySet,
+  ) -> Option<Arc<Chunklet>> {
     let key = PackedChunkletCoords::from_xyz(x, y, z);
-    (self.chunklets.remove(&key), self.colliders.remove(&key))
+    let chunklet = self.chunklets.remove(&key);
+    if let Some(handle) = self.colliders.remove(&key) {
+      colliders.remove(handle, islands, bodies, true);
+    }
+    chunklet
   }
-  pub fn put(&mut self, x: i32, y: u8, z: i32, chunklet: Arc<Chunklet>) {
+  pub fn put(
+    &mut self,
+    x: i32,
+    y: u8,
+    z: i32,
+    c: Chunklet,
+    colliders: &mut ColliderSet,
+  ) -> ColliderHandle {
+    let arc = Arc::new(c);
+    let shared = SharedShape(arc.clone() as Arc<dyn Shape>);
+    let handle = colliders.insert(
+      ColliderBuilder::new(shared)
+        .translation(Vec3::new(
+          (x * 16) as Real,
+          (y * 16) as Real,
+          (z * 16) as Real,
+        ))
+        .build(),
+    );
     self
       .chunklets
-      .insert(PackedChunkletCoords::from_xyz(x, y, z), chunklet);
-  }
-  pub fn put_collider(&mut self, x: i32, y: u8, z: i32, handle: ColliderHandle) {
+      .insert(PackedChunkletCoords::from_xyz(x, y, z), arc);
     self
       .colliders
       .insert(PackedChunkletCoords::from_xyz(x, y, z), handle);
+    handle
   }
 }
 //Option<NonZeroU32> is 32 bits
@@ -95,9 +120,17 @@ pub struct Chunklet {
   blocks: [BlockHandle; CHUNK_VOLUME],
   aabb: Aabb,
   pub tree: Octree,
+  pub cx: i32,
+  pub cy: i32,
+  pub cz: i32,
 }
 impl Chunklet {
-  pub fn new_with_blockhandle(blocks: [BlockColliderInfoHandle; CHUNK_VOLUME]) -> Self {
+  pub fn new_with_blockhandle(
+    cx: i32,
+    cy: i32,
+    cz: i32,
+    blocks: [BlockColliderInfoHandle; CHUNK_VOLUME],
+  ) -> Self {
     // i believe that this has no runtime cost, if it somehow does, either stop using NonZeroU32 or just
     // mem::transmute this array
 
@@ -106,9 +139,9 @@ impl Chunklet {
         == size_of::<[BlockHandle; CHUNK_VOLUME]>()
     );
 
-    Self::new(blocks.map(|x| NonZeroU32::new(x.0)))
+    Self::new(cx, cy, cz, blocks.map(|x| NonZeroU32::new(x.0)))
   }
-  pub fn new(blocks: [BlockHandle; CHUNK_VOLUME]) -> Self {
+  pub fn new(cx: i32, cy: i32, cz: i32, blocks: [BlockHandle; CHUNK_VOLUME]) -> Self {
     debug_assert!(!blocks.iter().all(|x| x.is_none()));
     let mut min = [u8::MAX, u8::MAX, u8::MAX];
     let mut max = [u8::MIN, u8::MIN, u8::MIN];
@@ -178,6 +211,9 @@ impl Chunklet {
       blocks,
       aabb: bounds,
       tree,
+      cx,
+      cy,
+      cz,
     }
   }
   #[inline(always)]

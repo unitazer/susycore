@@ -19,6 +19,7 @@ import gregtech.client.renderer.ICubeRenderer;
 import gregtech.client.renderer.texture.Textures;
 import gregtech.common.blocks.BlockMetalCasing.MetalCasingType;
 import gregtech.common.blocks.MetaBlocks;
+import supersymmetry.api.phys.Cuboid;
 import supersymmetry.api.phys.DebugCuboidEntity;
 import supersymmetry.api.phys.DebugSphereEntity;
 import supersymmetry.api.phys.Rapier;
@@ -89,20 +90,6 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                         (clickData -> {
                             Rapier.handleChunkAddition(this.getWorld().getChunk(this.getPos()));
                         })));
-        // builder.widget(
-        // new ClickButtonWidget(
-        // 108,
-        // 10,
-        // 38,
-        // 18,
-        // "ball",
-        // (clickData -> {
-        // BallHandle = Rapier.debugging_ball_w(
-        // this.getWorld(),
-        // this.getPos().getX(),
-        // this.getPos().getY() + 100,
-        // this.getPos().getZ());
-        // })));
         builder.widget(
                 new ClickButtonWidget(
                         148,
@@ -134,9 +121,10 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                         18,
                         "cuboid",
                         (clickData -> {
-                            var entity = new DebugCuboidEntity(this.getWorld());
+                            var entity = new DebugCuboidEntity(this.getWorld(), 3, 19, 3);
                             entity.setPosition(this.getPos().getX(), 100, this.getPos().getZ());
                             this.getWorld().spawnEntity(entity);
+                            entity.shape = new Cuboid(3, 19, 3);
                         })));
 
         return builder;

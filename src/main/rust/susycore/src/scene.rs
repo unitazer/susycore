@@ -1,5 +1,5 @@
 use std::mem;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 
 use jni::EnvUnowned;
 use jni::errors::ThrowRuntimeExAndDefault;
@@ -11,8 +11,9 @@ use rapier3d::prelude::*;
 
 use crate::JResult;
 use crate::chunklet::{Chunklet, TerrainData};
-use crate::dispatcher::ChunkletDispatcher;
+use crate::dispatcher::{ChunkletDispatcher, clear_boxes_java};
 
+use rapier3d::na::{Isometry3, Quaternion, Translation3, UnitQuaternion};
 //dimension specific information, root structure for the physics simulation
 pub struct Scene {
   pub pipeline: PhysicsPipeline,
@@ -52,23 +53,15 @@ impl Scene {
     v.get_mut(i).map(|s| f(s))
   }
   pub fn add_chunklet(&mut self, x: i32, y: u8, z: i32, c: Chunklet) {
-    if let (_, Some(old_handle)) = self.terrain.remove(x, y, z) {
-      self.collider_set.remove(
-        old_handle,
-        &mut self.island_manager,
-        &mut self.rigid_body_set,
-        true,
-      );
-    }
-    let arc = Arc::new(c);
-    let shared = SharedShape(arc.clone() as Arc<dyn Shape>);
-    let handle = self.collider_set.insert(
-      ColliderBuilder::new(shared)
-        .translation(Vec3::new((x * 16) as f32, (y * 16) as f32, (z * 16) as f32))
-        .build(),
+    self.terrain.remove(
+      x,
+      y,
+      z,
+      &mut self.collider_set,
+      &mut self.island_manager,
+      &mut self.rigid_body_set,
     );
-    self.terrain.put(x, y, z, arc);
-    self.terrain.put_collider(x, y, z, handle);
+    self.terrain.put(x, y, z, c, &mut self.collider_set);
   }
 
   pub fn initialize_scene(dim: usize, gravity: Vec3) {
@@ -129,7 +122,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_getEntityPose(
 ) {
   debug_assert!(world_id >= 0);
   let handle: ColliderHandle = unsafe { mem::transmute(handle) };
-  let mut buf = [0.0; 7];
+  let mut buf = [0.0; 10];
   Scene::with_scene(world_id as usize, |x| {
     let collider = x.collider_set.get(handle);
     if let Some(collider) = collider {
@@ -138,6 +131,14 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_getEntityPose(
         .translation
         .write_to_slice(&mut buf[0..3]);
       collider.position().rotation.write_to_slice(&mut buf[3..7]);
+      if let Some(parent) = collider.parent() {
+        if let Some(rb) = x.rigid_body_set.get(parent) {
+          let vel = rb.linvel();
+          buf[7] = vel.x;
+          buf[8] = vel.y;
+          buf[9] = vel.z;
+        }
+      }
     }
   });
   env
@@ -239,11 +240,64 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addForceDebug(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setEntityPose(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  handle: jlong,
+  x: jdouble,
+  y: jdouble,
+  z: jdouble,
+  qw: jdouble,
+  qx: jdouble,
+  qy: jdouble,
+  qz: jdouble,
+  vx: jdouble,
+  vy: jdouble,
+  vz: jdouble,
+) {
+  let handle: ColliderHandle = unsafe { mem::transmute(handle) };
+  Scene::with_scene_mut(world_id as usize, |scene| {
+    let collider = scene.collider_set.get(handle);
+    if let Some(collider) = collider {
+      if let Some(parent) = collider.parent() {
+        if let Some(rb) = scene.rigid_body_set.get_mut(parent) {
+          let position = Isometry3::from_parts(
+            Translation3::new(x as Real, y as Real, z as Real),
+            UnitQuaternion::new_unchecked(Quaternion::new(
+              qw as Real, qx as Real, qy as Real, qz as Real,
+            )),
+          )
+          .into();
+          rb.set_position(position, true);
+          rb.set_linvel(Vec3::new(vx as Real, vy as Real, vz as Real), true);
+        }
+      }
+    }
+  });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeEntity(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  handle: jlong,
+) {
+  let handle: ColliderHandle = unsafe { mem::transmute(handle) };
+  Scene::with_scene_mut(world_id as usize, |x| {
+    x.collider_set
+      .remove(handle, &mut x.island_manager, &mut x.rigid_body_set, true);
+  });
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_step(
   _env: EnvUnowned,
   _class: JClass,
   world_id: jint,
 ) {
+  clear_boxes_java();
   Scene::with_scene_mut(world_id as usize, |x| {
     x.pipeline.step(
       x.gravity,

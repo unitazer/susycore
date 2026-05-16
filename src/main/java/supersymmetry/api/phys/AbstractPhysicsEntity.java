@@ -24,8 +24,8 @@ public class AbstractPhysicsEntity extends Entity {
     private static final DataParameter<Float> QZ = EntityDataManager.createKey(AbstractPhysicsEntity.class,
             DataSerializers.FLOAT);
 
-    private Optional<Long> colliderId = Optional.empty();
-    private Quaternion rotation = Quaternion.IDENTITY;
+    Optional<Long> colliderId = Optional.empty();
+    Quaternion rotation = Quaternion.IDENTITY;
     public IShape shape;
 
     public AbstractPhysicsEntity(World w, IShape shape) {
@@ -76,10 +76,7 @@ public class AbstractPhysicsEntity extends Entity {
         super.onEntityUpdate();
         if (!this.world.isRemote && this.world instanceof WorldServer && this.colliderId != null &&
                 !this.colliderId.isEmpty()) {
-            var pos = Rapier.get_entity_pose(this);
-            var tr = pos.first();
-            this.setPosition(tr.x, tr.y, tr.z);
-            this.rotation = pos.second();
+            Rapier.syncEntity(this);
             this.dataManager.set(QW, (float) this.rotation.getW());
             this.dataManager.set(QX, (float) this.rotation.getX());
             this.dataManager.set(QY, (float) this.rotation.getY());
@@ -93,11 +90,6 @@ public class AbstractPhysicsEntity extends Entity {
     }
 
     @Override
-    protected boolean canBeRidden(Entity entityIn) {
-        return false;
-    }
-
-    @Override
     public boolean canRenderOnFire() {
         return false;
     }
@@ -105,6 +97,26 @@ public class AbstractPhysicsEntity extends Entity {
     @Override
     public boolean canBeCollidedWith() {
         return true;
+    }
+
+    @Override
+    public void onAddedToWorld() {
+        super.onAddedToWorld();
+        if (!this.getEntityWorld().isRemote) {
+            this.colliderId = Rapier.add_entity(this);
+            Rapier.setEntityPose(this);
+        }
+    }
+
+    @Override
+    public void setDead() {
+        Rapier.remove_entity(this);
+        super.setDead();
+    }
+
+    @Override
+    protected boolean canBeRidden(Entity entityIn) {
+        return false;
     }
 
     @Override
@@ -130,13 +142,5 @@ public class AbstractPhysicsEntity extends Entity {
         this.dataManager.register(QX, 0.0f);
         this.dataManager.register(QY, 0.0f);
         this.dataManager.register(QZ, 0.0f);
-    }
-
-    @Override
-    public void onAddedToWorld() {
-        super.onAddedToWorld();
-        if (!this.getEntityWorld().isRemote) {
-            this.colliderId = Rapier.add_entity(this);
-        }
     }
 }
