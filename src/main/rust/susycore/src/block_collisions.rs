@@ -6,13 +6,14 @@ use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use jni::EnvUnowned;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
 use jni::sys::{jdouble, jfloat, jint, jlong};
-use log::info;
 use ordered_float::OrderedFloat;
 use rapier3d::glamx::{Quat, usize};
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::Aabb;
 use rapier3d::parry::shape::Cuboid;
-use rapier3d::prelude::{Collider, ColliderBuilder, ColliderHandle, SharedShape};
+use rapier3d::prelude::{
+  Collider, ColliderBuilder, ColliderHandle, QueryFilter, RigidBodyHandle, SharedShape,
+};
 
 use crate::Real;
 use crate::chunklet::Chunklet;
@@ -175,10 +176,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
       Ok(())
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
-  info!(
-    "addChunk: world={}, subchunk=({}, {}, {})",
-    world_id, x, y, z
-  );
+  // info!(
+  //   "addChunk: world={}, subchunk=({}, {}, {})",
+  //   world_id, x, y, z
+  // );
   if buffer.iter().all(|x| *x == 0) {
     log::error!("empty subchunk supplied, shouldve been filtered out");
     return;
@@ -316,22 +317,66 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunk(
   });
 }
 
+//TODO make this called less often from the java side somehow
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
   _env: EnvUnowned,
   _class: JClass,
-  dimension: jint,
-  _chunk_x: jint,
-  _chunk_z: jint,
-  _chunk_y: jint,
+  world_id: jint,
+  cx: jint,
+  cz: jint,
+  cy: jint,
   x: jint,
   y: jint,
   z: jint,
-  _new_data: jint,
+  new_data: jint,
 ) {
-  debug_assert!(dimension >= 0);
+  debug_assert!(world_id >= 0);
   debug_assert!(x < 16 && x >= 0);
   debug_assert!(y < 16 && y >= 0);
   debug_assert!(z < 16 && z >= 0);
-  todo!()
+  debug_assert!(cy < 16 && cy >= 0);
+
+  Scene::with_scene_mut(world_id as usize, |xs| {
+    xs.terrain.update(
+      cx,
+      cy as u8,
+      cz,
+      x as u8,
+      y as u8,
+      z as u8,
+      BlockColliderInfoHandle(new_data as u32),
+    );
+
+    let block_world_x = (cx * 16 + x) as f32;
+    let block_world_y = (cy * 16 + y) as f32;
+    let block_world_z = (cz * 16 + z) as f32;
+
+    let block_aabb = Aabb::new(
+      Vec3::new(block_world_x, block_world_y, block_world_z),
+      Vec3::new(
+        block_world_x + 1.0,
+        block_world_y + 1.0,
+        block_world_z + 1.0,
+      ),
+    );
+
+    let query_pipeline = xs.broad_phase.as_query_pipeline(
+      xs.narrow_phase.query_dispatcher(),
+      &xs.rigid_body_set,
+      &xs.collider_set,
+      QueryFilter::default(),
+    );
+
+    let to_wake: Vec<RigidBodyHandle> = query_pipeline
+      .intersect_aabb_conservative(block_aabb)
+      .filter_map(|(_, co)| co.parent())
+      .collect();
+
+    for handle in to_wake {
+      if let Some(rb) = xs.rigid_body_set.get_mut(handle) {
+        rb.wake_up(true);
+      }
+    }
+  });
 }

@@ -30,11 +30,9 @@ public class ChunkSyncManager {
         }
     }
 
-    private static final int STALE_TICK_TIMEOUT = 20;
+    private static List<AxisAlignedBB> aabbTmp = new ArrayList<>();
 
-    private static final AxisAlignedBB INFINITE_BOX = new AxisAlignedBB(
-            -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE,
-            Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE);
+    private static final int STALE_TICK_TIMEOUT = 20;
 
     private final Long2ObjectOpenHashMap<Ticket> tickets = new Long2ObjectOpenHashMap<>();
     private final WorldServer world;
@@ -82,7 +80,6 @@ public class ChunkSyncManager {
         int added = 0;
 
         PooledMutableBlockPos pos = PooledMutableBlockPos.retain();
-        List<AxisAlignedBB> aabbTmp = new ArrayList<>();
         List<AbstractPhysicsEntity> ents = Rapier.entities;
         for (int i = 0, len = ents.size(); i < len; i++) {
             AbstractPhysicsEntity entity = ents.get(i);
@@ -127,8 +124,7 @@ public class ChunkSyncManager {
                         if (sy < 0 || sy >= chunk.storageArrays.length) continue;
                         ExtendedBlockStorage storage = chunk.storageArrays[sy];
                         if (storage == null || storage.isEmpty()) continue;
-                        Rapier.handleSubchunkAddition(
-                                world, chunk, INFINITE_BOX, aabbTmp, pos, storage, sy, worldId);
+                        Rapier.handleSubchunkAddition(world, chunk, aabbTmp, pos, storage, sy, worldId);
                         tickets.put(k, new Ticket(cx, sy, cz, gameTime));
                         subchunkAdded++;
                     }
@@ -163,14 +159,42 @@ public class ChunkSyncManager {
         for (Ticket t : tickets.values()) {
             boxes.add(
                     new AxisAlignedBB(
-                            t.x * 16,
-                            t.y * 16,
-                            t.z * 16,
-                            t.x * 16 + 16,
-                            t.y * 16 + 16,
-                            t.z * 16 + 16));
+                            t.x * 16, t.y * 16, t.z * 16, t.x * 16 + 16, t.y * 16 + 16, t.z * 16 + 16));
         }
         return boxes;
+    }
+
+    public void handleBlockChange(BlockPos pos) {
+        Integer worldIdObj = Rapier.initializedWorlds.get(world);
+        if (worldIdObj == null) return;
+        int worldId = worldIdObj;
+
+        int cx = pos.getX() >> 4;
+        int cy = pos.getY() >> 4;
+        int cz = pos.getZ() >> 4;
+        long k = key(cx, cy, cz);
+        if (!tickets.containsKey(k)) return;
+
+        BlockPos[] positions = new BlockPos[] {
+                pos, pos.east(), pos.west(), pos.up(), pos.down(), pos.south(), pos.north()
+        };
+
+        PooledMutableBlockPos tmpPos = PooledMutableBlockPos.retain();
+        for (BlockPos p : positions) {
+            int pcx = p.getX() >> 4;
+            int pcy = p.getY() >> 4;
+            int pcz = p.getZ() >> 4;
+            if (pcy < 0 || pcy > 15) continue;
+            long pk = key(pcx, pcy, pcz);
+            if (!tickets.containsKey(pk)) continue;
+
+            int lx = p.getX() & 0xF;
+            int ly = p.getY() & 0xF;
+            int lz = p.getZ() & 0xF;
+            int handle = Rapier.computeBlockColliderHandle(world, p, aabbTmp, tmpPos);
+            Rapier.partialSubchunkUpdate(worldId, pcx, pcz, pcy, lx, ly, lz, handle);
+        }
+        tmpPos.release();
     }
 
     private boolean isSubchunkLoaded(int x, int y, int z) {

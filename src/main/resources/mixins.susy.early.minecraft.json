@@ -6,6 +6,7 @@
   "compatibilityLevel" : "JAVA_8",
   "mixins" : [
     "BlockFireMixin",
+    "ChunkMixin",
     "EntityElytraMixin",
     "EntityFallingBlockMixin",
     "EntityMinecartMixin",

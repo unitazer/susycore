@@ -1,4 +1,4 @@
 [toolchain]
-channel="stable-2026-04-16"
+channel="nightly"
 # channel="stable"
-targets = ["aarch64", "x86_64-pc-windows-gnu"]
+# targets = ["aarch64", "x86_64-pc-windows-gnu"]

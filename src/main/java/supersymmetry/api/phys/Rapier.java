@@ -19,6 +19,7 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 import com.mojang.realmsclient.util.Pair;
 
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import supersymmetry.api.SusyLog;
 
 public class Rapier {
@@ -26,8 +27,12 @@ public class Rapier {
     // IBlockState -> collision data handle
     // ideally this would hash the coords aswell but thats probably too much
     // doesnt work well with TE's
-    static HashMap<IBlockState, Integer> blockStateCache = new HashMap<>();
+    static Int2IntOpenHashMap blockStateCache = new Int2IntOpenHashMap();
     public static HashMap<World, Integer> initializedWorlds = new HashMap<>();
+    private static final AxisAlignedBB CHUNK_BOX = new AxisAlignedBB(
+            -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE,
+            Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE);
+
     // to be passed to rust as a mutable array reference so that you could write rotation/position
     // data to it
     private static double[] cache = new double[32];
@@ -45,9 +50,6 @@ public class Rapier {
     }
 
     public static void handleChunkAddition(Chunk chunk) {
-        AxisAlignedBB chunk_box = new AxisAlignedBB(BlockPos.ORIGIN, new BlockPos(16, 256, 16))
-                .offset(chunk.x * 16, 0, chunk.z * 16);
-
         World world = chunk.getWorld();
         if (!initializedWorlds.containsKey(world)) {
             SusyLog.logger.error("handleChunkAddition on a chunk from an uninitialized world");
@@ -55,20 +57,17 @@ public class Rapier {
         }
 
         List<AxisAlignedBB> aabb_tmp = new ArrayList<>();
-
         long startTime = System.nanoTime();
-
         PooledMutableBlockPos pos = BlockPos.PooledMutableBlockPos.retain();
 
         Integer x = initializedWorlds.get(world);
         for (int i = 0; i < chunk.storageArrays.length; i++) {
             handleSubchunkAddition(
-                    world, chunk, chunk_box, aabb_tmp, pos, chunk.storageArrays[i], i, x.intValue());
+                    world, chunk, aabb_tmp, pos, chunk.storageArrays[i], i, x.intValue());
         }
         pos.release();
 
         long endTime = System.nanoTime();
-
         SusyLog.logger.info(
                 String.format("handleChunkAddition took %.3f ms", (endTime - startTime) / 1000000f));
     }
@@ -76,7 +75,6 @@ public class Rapier {
     public static void handleSubchunkAddition(
                                               World world,
                                               Chunk chunk,
-                                              AxisAlignedBB chunk_box,
                                               List<AxisAlignedBB> aabb_tmp,
                                               PooledMutableBlockPos pos,
                                               ExtendedBlockStorage subchunk,
@@ -91,64 +89,14 @@ public class Rapier {
             for (int ly = 0; ly < 16; ly++) {
                 for (int lz = 0; lz < 16; lz++) {
                     for (int lx = 0; lx < 16; lx++) {
-
-                        int worldX = chunkBaseX + lx;
-                        int worldY = chunkBaseY + ly;
-                        int worldZ = chunkBaseZ + lz;
-                        pos.setPos(worldX, worldY, worldZ);
-
-                        IBlockState blockstate1 = subchunk.get(lx, ly, lz);
-                        Block block = blockstate1.getBlock();
-                        if (block == Blocks.AIR) {
-                            continue;
-                        }
-                        if (block.isPassable(world, pos)) {
-                            continue;
-                        }
-                        if (blockstate1.getMaterial() == Material.WATER || blockstate1.getMaterial() == Material.LAVA) {
-                            continue;
-                        }
-                        // TODO
-                        // figure out if this is worth doing here or if its worth it to detect these on the rust side
-                        if (isOccluded(world, pos)) {
-                            continue;
-                        }
-
-                        int colliderInfoHandle = blockStateCache.computeIfAbsent(
-                                blockstate1,
-                                (blockstate) -> {
-                                    float friction = Math.max(
-                                            Math.min(1f - block.getSlipperiness(blockstate, world, pos, null), 0),
-                                            1);
-                                    aabb_tmp.clear();
-                                    blockstate.addCollisionBoxToList(world, pos, chunk_box, aabb_tmp, null, true);
-
-                                    int size = aabb_tmp.size();
-                                    if (size == 0) {
-                                        return 0;
-                                    }
-                                    double[] box_data = new double[size * 6];
-
-                                    for (int j = 0; j < size; j++) {
-                                        AxisAlignedBB box = aabb_tmp.get(j);
-                                        int j0 = j * 6;
-                                        box_data[j0] = box.minX - worldX;
-                                        box_data[j0 + 1] = box.minY - worldY;
-                                        box_data[j0 + 2] = box.minZ - worldZ;
-                                        box_data[j0 + 3] = box.maxX - worldX;
-                                        box_data[j0 + 4] = box.maxY - worldY;
-                                        box_data[j0 + 5] = box.maxZ - worldZ;
-                                    }
-                                    int h = addColliderInfo(friction, 0.9, 1000.0, box_data);
-                                    return h;
-                                });
+                        pos.setPos(chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz);
+                        int handle = computeBlockColliderHandle(world, pos, aabb_tmp, pos);
                         int index = ly << 8 | lz << 4 | lx;
-                        subchunkColliderInfo[index] = colliderInfoHandle;
+                        subchunkColliderInfo[index] = handle;
                     }
                 }
             }
         }
-
         addChunk(world_id, chunk.x, yLevel, chunk.z, subchunkColliderInfo);
     }
 
@@ -250,10 +198,50 @@ public class Rapier {
     // xyz chunk coordniates (chunk space), subchunk
     static native void removeChunk(int world_id, int x, int y, int z);
 
-    // todo
-    private static native void partialSubchunkUpdate(
-                                                     int world_id, int chunk_x, int chunk_z, int chunk_y, int x, int y,
-                                                     int z, int new_data);
+    public static native void partialSubchunkUpdate(int world_id, int chunk_x, int chunk_z, int chunk_y, int x, int y,
+                                                    int z, int new_data);
+
+    public static int computeBlockColliderHandle(World world, BlockPos pos, List<AxisAlignedBB> aabbTmp,
+                                                 PooledMutableBlockPos tmpPos) {
+        IBlockState state = world.getBlockState(pos);
+        Block block = state.getBlock();
+        if (block == Blocks.AIR) return 0;
+        tmpPos.setPos(pos.getX(), pos.getY(), pos.getZ());
+        if (block.isPassable(world, tmpPos)) return 0;
+        if (state.getMaterial() == Material.WATER || state.getMaterial() == Material.LAVA) return 0;
+        // TODO maybe do this on the rust side?
+        if (isOccluded(world, tmpPos)) return 0;
+
+        // TODO figure out if this actually gives a unique key like IBlockState.hashcode
+        int sid = Block.getStateId(state);
+        int cached = blockStateCache.get(sid);
+        if (cached != 0 || blockStateCache.containsKey(sid)) {
+            return cached;
+        }
+        float friction = Math.max(Math.min(1f - block.getSlipperiness(state, world, tmpPos, null), 0), 1);
+        aabbTmp.clear();
+        state.addCollisionBoxToList(world, tmpPos, CHUNK_BOX, aabbTmp, null, true);
+        int size = aabbTmp.size();
+        int handle;
+        if (size == 0) {
+            handle = 0;
+        } else {
+            double[] boxData = new double[size * 6];
+            for (int j = 0; j < size; j++) {
+                AxisAlignedBB box = aabbTmp.get(j);
+                int j0 = j * 6;
+                boxData[j0] = box.minX - pos.getX();
+                boxData[j0 + 1] = box.minY - pos.getY();
+                boxData[j0 + 2] = box.minZ - pos.getZ();
+                boxData[j0 + 3] = box.maxX - pos.getX();
+                boxData[j0 + 4] = box.maxY - pos.getY();
+                boxData[j0 + 5] = box.maxZ - pos.getZ();
+            }
+            handle = addColliderInfo(friction, 0.9, 1000.0, boxData);
+        }
+        blockStateCache.put(sid, handle);
+        return handle;
+    }
 
     private static boolean isOccluded(World world, BlockPos pos) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
@@ -275,8 +263,6 @@ public class Rapier {
         return x * y * z;
     }
 
-    private static native long debuggingBall(int world_id, int x, int y, int z);
-
     private static native void step(int world_id);
 
     public static void setEntityPose(AbstractPhysicsEntity entity) {
@@ -289,6 +275,7 @@ public class Rapier {
                 entity.motionX, entity.motionY, entity.motionZ);
     }
 
+    // pos,quaternion rotation,velocity
     private static native void setEntityPose(int world_id, long collider_handle,
                                              double x, double y, double z,
                                              double qw, double qx, double qy, double qz,
@@ -309,6 +296,5 @@ public class Rapier {
 
     private static native void getEntityPose(int world_id, long collider_handle, double[] mut_array);
 
-    private static native void addForceDebug(
-                                             int world_id, long collider_handle, double fx, double fy, double fz);
+    private static native void addForceDebug(int world_id, long collider_handle, double fx, double fy, double fz);
 }

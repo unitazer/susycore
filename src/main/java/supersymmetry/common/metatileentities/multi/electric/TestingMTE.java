@@ -19,7 +19,6 @@ import gregtech.client.renderer.ICubeRenderer;
 import gregtech.client.renderer.texture.Textures;
 import gregtech.common.blocks.BlockMetalCasing.MetalCasingType;
 import gregtech.common.blocks.MetaBlocks;
-import supersymmetry.api.phys.Cuboid;
 import supersymmetry.api.phys.DebugCuboidEntity;
 import supersymmetry.api.phys.DebugSphereEntity;
 import supersymmetry.api.phys.Rapier;
@@ -121,10 +120,9 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                         18,
                         "cuboid",
                         (clickData -> {
-                            var entity = new DebugCuboidEntity(this.getWorld(), 3, 19, 3);
+                            var entity = new DebugCuboidEntity(this.getWorld());
                             entity.setPosition(this.getPos().getX(), 100, this.getPos().getZ());
                             this.getWorld().spawnEntity(entity);
-                            entity.shape = new Cuboid(3, 19, 3);
                         })));
 
         return builder;

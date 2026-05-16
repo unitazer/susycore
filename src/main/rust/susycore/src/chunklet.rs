@@ -8,6 +8,7 @@ use rapier3d::prelude::{
   PointQuery, RayCast, RigidBodySet, Shape, ShapeType, SharedShape, TypedShape,
 };
 use std::collections::HashMap;
+use std::mem;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -69,6 +70,40 @@ impl TerrainData {
   pub fn get(&self, x: i32, y: u8, z: i32) -> Option<&Arc<Chunklet>> {
     self.chunklets.get(&PackedChunkletCoords::from_xyz(x, y, z))
   }
+
+  //a very unsafe function btw
+  pub fn update(
+    &mut self,
+    cx: i32,
+    cy: u8,
+    cz: i32,
+    x: u8,
+    y: u8,
+    z: u8,
+    new: BlockColliderInfoHandle,
+  ) {
+    if let Some(mut arc) = self
+      .chunklets
+      .get_mut(&PackedChunkletCoords::from_xyz(cx, cy, cz))
+    {
+      unsafe {
+        let chunklet = Arc::get_mut_unchecked(&mut arc);
+
+        assert!(size_of::<BlockColliderInfoHandle>() == size_of::<Option<NonZeroU32>>());
+        assert!(
+          mem::transmute::<BlockColliderInfoHandle, Option<NonZeroU32>>(BlockColliderInfoHandle(0))
+            == None
+        );
+        assert!(
+          mem::transmute::<BlockColliderInfoHandle, Option<NonZeroU32>>(BlockColliderInfoHandle(1))
+            == NonZeroU32::new(1)
+        );
+        chunklet.set(x, y, z, mem::transmute(new))
+      }
+    } else {
+      log::error!("no chunk at {cx} {cy} {cz}");
+    }
+  }
   pub fn remove(
     &mut self,
     x: i32,
@@ -117,8 +152,8 @@ impl TerrainData {
 type BlockHandle = Option<NonZeroU32>;
 //16x16x16 block grid
 pub struct Chunklet {
-  blocks: [BlockHandle; CHUNK_VOLUME],
-  aabb: Aabb,
+  pub blocks: [BlockHandle; CHUNK_VOLUME],
+  pub aabb: Aabb,
   pub tree: Octree,
   pub cx: i32,
   pub cy: i32,
@@ -133,7 +168,6 @@ impl Chunklet {
   ) -> Self {
     // i believe that this has no runtime cost, if it somehow does, either stop using NonZeroU32 or just
     // mem::transmute this array
-
     assert!(
       size_of::<[BlockColliderInfoHandle; CHUNK_VOLUME]>()
         == size_of::<[BlockHandle; CHUNK_VOLUME]>()
@@ -216,6 +250,11 @@ impl Chunklet {
       cz,
     }
   }
+  #[inline(always)]
+  pub fn set(&mut self, x: u8, y: u8, z: u8, value: Option<NonZeroU32>) {
+    self.blocks[Self::index(x, y, z) as usize] = value;
+  }
+
   #[inline(always)]
   pub fn get(&self, x: u8, y: u8, z: u8) -> BlockColliderInfoHandle {
     BlockColliderInfoHandle(

@@ -1,6 +1,7 @@
 package supersymmetry.client.renderer.handler;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import net.minecraft.client.Minecraft;
@@ -29,12 +30,12 @@ public class PhysicsDebugRenderer {
     public static List<AxisAlignedBB> debugBoxes = new ArrayList<>();
     public static List<AxisAlignedBB> debugBoxes2 = new ArrayList<>();
     public static volatile List<AxisAlignedBB> debugBoxes3 = new ArrayList<>();
-    private static List<AxisAlignedBB> writeBuffer = new ArrayList<>();
+    private static volatile List<AxisAlignedBB> writeBuffer = Collections.synchronizedList(new ArrayList<>());
 
     public static void clear_boxes() {
         if (!writeBuffer.isEmpty()) {
             debugBoxes3 = writeBuffer;
-            writeBuffer = new ArrayList<>();
+            writeBuffer = Collections.synchronizedList(new ArrayList<>());
         }
     }
 

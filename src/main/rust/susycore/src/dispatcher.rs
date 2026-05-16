@@ -12,6 +12,7 @@ use rapier3d::parry::query::{
   Unsupported,
 };
 use rapier3d::prelude::{Aabb, ContactData, ContactManifoldData, Cuboid, Pose, Shape, ShapeType};
+use rapier3d::utils::PoseOps;
 
 use crate::block_collisions::{self, COLLIDERS};
 use crate::chunklet::Chunklet;
@@ -208,6 +209,7 @@ fn manifolds_chunklet_shape(
                 aabb.translated(Vec3::new(x as Real, y as Real, z as Real) + world_offset),
               );
             }
+
             if !swap {
               DefaultQueryDispatcher
                 .contact_manifold_convex_convex(

@@ -1,3 +1,5 @@
+#![feature(get_mut_unchecked)]
+
 pub mod block_collisions;
 pub mod chunklet;
 pub mod dispatcher;
