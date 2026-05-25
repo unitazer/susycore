@@ -19,7 +19,7 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 import com.mojang.realmsclient.util.Pair;
 
-import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import supersymmetry.api.SusyLog;
 
 public class Rapier {
@@ -27,7 +27,7 @@ public class Rapier {
     // IBlockState -> collision data handle
     // ideally this would hash the coords aswell but thats probably too much
     // doesnt work well with TE's
-    static Int2IntOpenHashMap blockStateCache = new Int2IntOpenHashMap();
+    static Object2IntOpenHashMap<IBlockState> blockStateCache = new Object2IntOpenHashMap<>();
     public static HashMap<World, Integer> initializedWorlds = new HashMap<>();
     private static final AxisAlignedBB CHUNK_BOX = new AxisAlignedBB(
             -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE,
@@ -212,10 +212,8 @@ public class Rapier {
         // TODO maybe do this on the rust side?
         if (isOccluded(world, tmpPos)) return 0;
 
-        // TODO figure out if this actually gives a unique key like IBlockState.hashcode
-        int sid = Block.getStateId(state);
-        int cached = blockStateCache.get(sid);
-        if (cached != 0 || blockStateCache.containsKey(sid)) {
+        int cached = blockStateCache.getInt(state);
+        if (cached != 0 || blockStateCache.containsKey(state)) {
             return cached;
         }
         float friction = Math.max(Math.min(1f - block.getSlipperiness(state, world, tmpPos, null), 0), 1);
@@ -239,7 +237,7 @@ public class Rapier {
             }
             handle = addColliderInfo(friction, 0.9, 1000.0, boxData);
         }
-        blockStateCache.put(sid, handle);
+        blockStateCache.put(state, handle);
         return handle;
     }
 
