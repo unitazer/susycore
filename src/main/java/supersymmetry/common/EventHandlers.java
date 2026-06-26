@@ -18,6 +18,7 @@ import net.minecraft.server.management.PlayerList;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
+import net.minecraft.world.WorldServerMulti;
 import net.minecraftforge.event.entity.living.LivingFallEvent;
 import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.event.world.WorldEvent;
@@ -93,7 +94,7 @@ public class EventHandlers {
         GameRules gameRules = event.getWorld().getGameRules();
 
         World world = event.getWorld();
-        if (!world.isRemote) {
+        if (!world.isRemote && !(world instanceof WorldServerMulti)) {
             Rapier.initialize_world(world, -10.0f, 0.0);
             chunkSyncManagers.put((WorldServer) world, new ChunkSyncManager((WorldServer) world));
         }
@@ -108,6 +109,14 @@ public class EventHandlers {
     }
 
     @SubscribeEvent
+    public static void onWorldUnload(WorldEvent.Unload event) {
+        World world = event.getWorld();
+        if (!world.isRemote) {
+            Rapier.destroyWorld(world);
+        }
+    }
+
+    @SubscribeEvent
     public static void onTrySpawnPortal(BlockEvent.PortalSpawnEvent event) {
         event.setCanceled(true);
     }
@@ -115,7 +124,7 @@ public class EventHandlers {
     @SubscribeEvent
     public static void onWorldTick(TickEvent.WorldTickEvent event) {
         World world = event.world;
-        if (world.isRemote || !(world instanceof WorldServer server)) {
+        if (world.isRemote || world instanceof WorldServerMulti || !(world instanceof WorldServer server)) {
             return;
         }
         // this can be done earlier, saves some tps
@@ -131,7 +140,7 @@ public class EventHandlers {
             ChunkSyncManager csm = chunkSyncManagers.get(world);
             csm.update();
             Rapier.step_world(world);
-            csm.update();
+            // csm.update();
             double dt = (System.nanoTime() - start) / 1000000.0;
             if (dt > 10) {
                 SusyLog.logger.warn(String.format("pstep took %.3f ms", dt));

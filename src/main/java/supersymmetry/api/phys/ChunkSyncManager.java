@@ -13,7 +13,6 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import supersymmetry.api.SusyLog;
-import supersymmetry.client.renderer.handler.PhysicsDebugRenderer;
 
 public class ChunkSyncManager {
 
@@ -32,7 +31,7 @@ public class ChunkSyncManager {
 
     private static List<AxisAlignedBB> aabbTmp = new ArrayList<>();
 
-    private static final int STALE_TICK_TIMEOUT = 20;
+    private static final int STALE_TICK_TIMEOUT = 80;
 
     private final Long2ObjectOpenHashMap<Ticket> tickets = new Long2ObjectOpenHashMap<>();
     private final WorldServer world;
@@ -46,7 +45,6 @@ public class ChunkSyncManager {
     }
 
     public void update() {
-        PhysicsDebugRenderer.debugBoxes2.clear();
         long gameTime = world.getTotalWorldTime();
         Integer worldIdObj = Rapier.initializedWorlds.get(world);
         if (worldIdObj == null) {
@@ -64,8 +62,6 @@ public class ChunkSyncManager {
                 Rapier.removeChunk(worldId, t.x, t.y, t.z);
                 it.remove();
                 removed++;
-            } else {
-                t.lastInhabitedTick = gameTime;
             }
         }
         if (removed > 0) {
@@ -77,7 +73,7 @@ public class ChunkSyncManager {
         }
 
         long tickOverlap = System.nanoTime();
-        int added = 0;
+        // int added = 0;
 
         PooledMutableBlockPos pos = PooledMutableBlockPos.retain();
         List<AbstractPhysicsEntity> ents = Rapier.entities;
@@ -86,7 +82,7 @@ public class ChunkSyncManager {
 
             AxisAlignedBB bb = entity.getEntityBoundingBox();
             if (bb == null) {
-                throw new RuntimeException("PhysicsDebugRenderer: AbstractPhysicsEntity has a null aabb");
+                throw new RuntimeException("AbstractPhysicsEntity has a null aabb");
             }
 
             bb = bb.union(bb.offset(entity.motionX, entity.motionY, entity.motionZ));
@@ -104,64 +100,30 @@ public class ChunkSyncManager {
             if (minCY == maxCY) {
                 continue;
             }
-            PhysicsDebugRenderer.debugBoxes2.add(
-                    new AxisAlignedBB(
-                            (double) (minCX * 16),
-                            (double) (minCY * 16),
-                            (double) (minCZ * 16),
-                            (double) (maxCX * 16),
-                            (double) (maxCY * 16),
-                            (double) (maxCZ * 16)));
-
             for (int cx = minCX; cx <= maxCX; cx++) {
                 for (int cz = minCZ; cz <= maxCZ; cz++) {
-                    long chunkStart = System.nanoTime();
+                    // long chunkStart = System.nanoTime();
+                    if (!world.isBlockLoaded(new BlockPos(cx << 4, 64, cz << 4))) continue;
                     Chunk chunk = world.getChunk(cx, cz);
-                    int subchunkAdded = 0;
+                    if (!chunk.isLoaded()) continue;
+                    // int subchunkAdded = 0;
                     for (int sy = minCY; sy <= maxCY; sy++) {
                         long k = key(cx, sy, cz);
-                        if (tickets.containsKey(k)) continue;
+                        Ticket existing = tickets.get(k);
+                        if (existing != null) {
+                            existing.lastInhabitedTick = gameTime;
+                            continue;
+                        }
                         if (sy < 0 || sy >= chunk.storageArrays.length) continue;
                         ExtendedBlockStorage storage = chunk.storageArrays[sy];
                         if (storage == null || storage.isEmpty()) continue;
                         Rapier.handleSubchunkAddition(world, chunk, aabbTmp, pos, storage, sy, worldId);
                         tickets.put(k, new Ticket(cx, sy, cz, gameTime));
-                        subchunkAdded++;
                     }
-                    double chunkMs = (System.nanoTime() - chunkStart) / 1_000_000.0;
-                    if (subchunkAdded > 0 && chunkMs > 1.0) {
-                        SusyLog.logger.info(
-                                "subchunk adds at [{},{}] took {} ms ({} subchunks)",
-                                cx,
-                                cz,
-                                String.format("%.3f", chunkMs),
-                                subchunkAdded);
-                    }
-                    added += subchunkAdded;
                 }
             }
         }
         pos.release();
-        double overlapMs = (System.nanoTime() - tickOverlap) / 1_000_000.0;
-        if (added > 0) {
-            SusyLog.logger.info(
-                    "added {} subchunks ({} total tracked, overlapScanMs={})",
-                    added,
-                    tickets.size(),
-                    String.format("%.3f", overlapMs));
-        }
-        List<AxisAlignedBB> snapshot = getTrackedSubchunkBoxes();
-        PhysicsDebugRenderer.debugBoxes = snapshot;
-    }
-
-    public List<AxisAlignedBB> getTrackedSubchunkBoxes() {
-        List<AxisAlignedBB> boxes = new ArrayList<>();
-        for (Ticket t : tickets.values()) {
-            boxes.add(
-                    new AxisAlignedBB(
-                            t.x * 16, t.y * 16, t.z * 16, t.x * 16 + 16, t.y * 16 + 16, t.z * 16 + 16));
-        }
-        return boxes;
     }
 
     public void handleBlockChange(BlockPos pos) {
@@ -198,9 +160,12 @@ public class ChunkSyncManager {
     }
 
     private boolean isSubchunkLoaded(int x, int y, int z) {
-        if (!world.isBlockLoaded(new BlockPos(x << 4, 64, z << 4))) return false;
+        if (!world.isBlockLoaded(new BlockPos(x << 4, y << 4, z << 4))) return false;
         Chunk chunk = world.getChunk(x, z);
         if (chunk == null) return false;
-        return y >= 0 && y < chunk.storageArrays.length;
+        return y < 0 || y >= chunk.storageArrays.length;
+        // if (y < 0 || y >= chunk.storageArrays.length) return false;
+        // ExtendedBlockStorage storage = chunk.storageArrays[y];
+        // return storage != null && !storage.isEmpty();
     }
 }

@@ -81,8 +81,10 @@ public class Native {
         }
     }
 
-    // Native methods
     public static native void goog();
 
     public static native void init();
+
+    // TODO remove
+    public static native void frametest();
 }

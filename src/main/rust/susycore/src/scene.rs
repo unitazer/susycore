@@ -11,7 +11,7 @@ use rapier3d::prelude::*;
 
 use crate::JResult;
 use crate::chunklet::{Chunklet, TerrainData};
-use crate::dispatcher::{ChunkletDispatcher, clear_boxes_java};
+use crate::dispatcher::ChunkletDispatcher;
 
 use rapier3d::na::{Isometry3, Quaternion, Translation3, UnitQuaternion};
 //dimension specific information, root structure for the physics simulation
@@ -61,16 +61,35 @@ impl Scene {
       &mut self.island_manager,
       &mut self.rigid_body_set,
     );
+
+    if c.blocks.iter().all(|b| b.is_none()) {
+      log::error!("empty chunklet supplied, shouldve been filtered out");
+      return;
+    }
     self.terrain.put(x, y, z, c, &mut self.collider_set);
   }
 
   pub fn initialize_scene(dim: usize, gravity: Vec3) {
     Self::with_scenes(|x| {
-      if dim == x.len() {
+      if dim < x.len() {
+        x[dim] = Self::new(gravity);
+      } else if dim == x.len() {
         x.push(Self::new(gravity));
       } else {
-        panic!("?????");
+        panic!("dimension out of sequence");
       }
+    });
+  }
+  pub fn destroy_scene(dim: usize) {
+    Self::with_scenes(|x| {
+      if dim < x.len() {
+        x[dim] = Self::new(Vec3::new(0., 0., 0.));
+      }
+    });
+  }
+  pub fn reset_all() {
+    Self::with_scenes(|x| {
+      x.clear();
     });
   }
   fn new(gravity: Vec3) -> Self {
@@ -297,7 +316,6 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_step(
   _class: JClass,
   world_id: jint,
 ) {
-  clear_boxes_java();
   Scene::with_scene_mut(world_id as usize, |x| {
     x.pipeline.step(
       x.gravity,

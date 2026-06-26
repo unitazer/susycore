@@ -9,8 +9,11 @@ pub struct Octree {
 
 impl Octree {
   pub fn new(log2_size: u32) -> Self {
-    // worst-case capacity for a fully-dense octree at this depth
-    let capacity = ((8usize.pow(log2_size) - 1) / 7).max(1024);
+    let capacity = if log2_size > 0 {
+      1 + 8 * ((8usize.pow(log2_size) - 1) / 7)
+    } else {
+      1
+    };
     Self {
       data: vec![0; capacity],
       log2_size,
@@ -100,6 +103,103 @@ impl Octree {
     let index = self.size;
     self.size += 8;
     index
+  }
+
+  pub fn query_aabb(&self, mins: [f32; 3], maxs: [f32; 3], mut f: impl FnMut(u32, u8, u8, u8)) {
+    let size = 1 << self.log2_size;
+    if maxs[0] < 0.0
+      || mins[0] > size as f32
+      || maxs[1] < 0.0
+      || mins[1] > size as f32
+      || maxs[2] < 0.0
+      || mins[2] > size as f32
+    {
+      return;
+    }
+    let mut stack: Vec<(usize, u8, u8, u8, u8)> = Vec::with_capacity(128);
+    stack.push((0, 0, 0, 0, self.log2_size as u8));
+    while let Some((node, ox, oy, oz, level)) = stack.pop() {
+      if self.data[node] == 0 {
+        continue;
+      }
+      let node_size = 1 << level;
+      let nx = ox as f32;
+      let ny = oy as f32;
+      let nz = oz as f32;
+      let nx2 = nx + node_size as f32;
+      let ny2 = ny + node_size as f32;
+      let nz2 = nz + node_size as f32;
+      if nx2 < mins[0]
+        || nx > maxs[0]
+        || ny2 < mins[1]
+        || ny > maxs[1]
+        || nz2 < mins[2]
+        || nz > maxs[2]
+      {
+        continue;
+      }
+      if level == 0 {
+        if self.data[node] < 0 {
+          f((-self.data[node]) as u32, ox, oy, oz);
+        }
+      } else if self.data[node] > 0 {
+        let child_level = level - 1;
+        let base = self.data[node] as usize;
+        for octant in 0..8u8 {
+          let cx = ox + ((octant & 1) << child_level);
+          let cy = oy + (((octant >> 1) & 1) << child_level);
+          let cz = oz + (((octant >> 2) & 1) << child_level);
+          stack.push((base + octant as usize, cx, cy, cz, child_level));
+        }
+      }
+    }
+  }
+
+  pub fn set_block(&mut self, x: u8, y: u8, z: u8, handle: Option<u32>) {
+    let bits = |val: u8, bit: u8| usize::from(val & bit != 0);
+    let octant4 = bits(x, 8) | (bits(y, 8) << 1) | (bits(z, 8) << 2);
+    let octant3 = bits(x, 4) | (bits(y, 4) << 1) | (bits(z, 4) << 2);
+    let octant2 = bits(x, 2) | (bits(y, 2) << 1) | (bits(z, 2) << 2);
+    let octant1 = bits(x, 1) | (bits(y, 1) << 1) | (bits(z, 1) << 2);
+
+    let node = 0usize;
+    if self.data[node] == 0 && handle.is_some() {
+      self.initialize_branch(node);
+    }
+    let node = if self.data[node] > 0 {
+      self.child_index(node, octant4)
+    } else {
+      return;
+    };
+    if self.data[node] == 0 && handle.is_some() {
+      self.initialize_branch(node);
+    }
+    let node = if self.data[node] > 0 {
+      self.child_index(node, octant3)
+    } else {
+      return;
+    };
+    if self.data[node] == 0 && handle.is_some() {
+      self.initialize_branch(node);
+    }
+    let node = if self.data[node] > 0 {
+      self.child_index(node, octant2)
+    } else {
+      return;
+    };
+    if self.data[node] == 0 && handle.is_some() {
+      self.initialize_branch(node);
+    }
+    let node = if self.data[node] > 0 {
+      self.child_index(node, octant1)
+    } else {
+      return;
+    };
+
+    match handle {
+      Some(h) => self.data[node] = -(h as i32),
+      None => self.data[node] = 0,
+    }
   }
 
   pub fn delete_branch(&mut self, parent_index: usize) {

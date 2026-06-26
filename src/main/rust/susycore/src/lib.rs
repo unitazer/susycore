@@ -1,10 +1,9 @@
-#![feature(get_mut_unchecked)]
-
 pub mod block_collisions;
 pub mod chunklet;
 pub mod dispatcher;
 pub mod logger;
 pub mod octree;
+pub mod rendering;
 pub mod scene;
 
 use std::env;
@@ -19,6 +18,44 @@ use self::logger::SusycoreJavaLogger;
 pub type IVec3 = Vector3<i32>;
 pub type Real = rapier3d::math::Real;
 pub type JResult<T> = Result<T, jni::errors::Error>;
+#[allow(
+  unsafe_op_in_unsafe_fn,
+  clippy::all,
+  non_camel_case_types,
+  non_snake_case,
+  non_upper_case_globals,
+  unused,
+  improper_ctypes,
+  dead_code
+)]
+mod gl {
+  include!(concat!(env!("OUT_DIR"), "/gl_bindings.rs"));
+}
+
+#[cfg(target_os = "linux")]
+mod glsmit {
+  use std::{
+    ffi::{CStr, CString, c_void},
+    str::FromStr,
+    sync::Once,
+  };
+
+  use crate::gl;
+
+  #[link(name = "GL")]
+  unsafe extern "C" {
+    fn glXGetProcAddress(procname: *const u8) -> *const c_void;
+  }
+  fn glx_load(name: &CStr) -> *const c_void {
+    unsafe { glXGetProcAddress(name.as_ptr() as *const u8) }
+  }
+  static INIT: Once = Once::new();
+  pub fn ensure_gl_loaded() {
+    INIT.call_once(|| {
+      gl::load_with(|x| glx_load(CString::from_str(x).unwrap().as_c_str()));
+    });
+  }
+}
 
 fn goog() {
   let now = Instant::now();
@@ -59,22 +96,3 @@ pub extern "system" fn Java_supersymmetry_common_Native_init(mut env: EnvUnowned
     })
     .resolve::<ThrowRuntimeExAndDefault>();
 }
-// #[cfg(target_os = "linux")]
-// mod gl_current {
-//
-//   use std::ffi::{CStr, c_void};
-//
-//   #[link(name = "GL")]
-//   unsafe extern "system" {
-//     // fn glXGetCurrentContext() -> *mut c_void;
-//     // fn glXGetCurrentDisplay() -> *mut c_void;
-//     fn glXGetProcAddress(procname: *const u8) -> *const c_void;
-//     // fn glxGetProcAddressARB(procname:*const u8) -> *const c_void;
-//   }
-//   fn glx_load(name: &CStr) -> *const c_void {
-//     unsafe { glXGetProcAddress(name.as_ptr() as *const u8) }
-//   }
-//   pub unsafe fn make_glow() -> glow::Context {
-//     unsafe { glow::Context::from_loader_function_cstr(glx_load) }
-//   }
-// }

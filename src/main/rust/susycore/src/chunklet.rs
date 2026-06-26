@@ -8,7 +8,7 @@ use rapier3d::prelude::{
   PointQuery, RayCast, RigidBodySet, Shape, ShapeType, SharedShape, TypedShape,
 };
 use std::collections::HashMap;
-use std::mem;
+use std::mem::size_of;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -72,6 +72,10 @@ impl TerrainData {
   }
 
   //a very unsafe function btw
+  fn handle_to_blockhandle(h: BlockColliderInfoHandle) -> Option<NonZeroU32> {
+    NonZeroU32::new(h.0)
+  }
+
   pub fn update(
     &mut self,
     cx: i32,
@@ -81,27 +85,57 @@ impl TerrainData {
     y: u8,
     z: u8,
     new: BlockColliderInfoHandle,
+    colliders: &mut ColliderSet,
+    islands: &mut IslandManager,
+    bodies: &mut RigidBodySet,
   ) {
-    if let Some(mut arc) = self
-      .chunklets
-      .get_mut(&PackedChunkletCoords::from_xyz(cx, cy, cz))
-    {
-      unsafe {
-        let chunklet = Arc::get_mut_unchecked(&mut arc);
+    let key = PackedChunkletCoords::from_xyz(cx, cy, cz);
+    let old_blocks = match self.chunklets.get(&key) {
+      Some(arc) => arc.blocks,
+      None => {
+        log::error!("no chunk at {cx} {cy} {cz}");
+        return;
+      }
+    };
 
-        assert!(size_of::<BlockColliderInfoHandle>() == size_of::<Option<NonZeroU32>>());
-        assert!(
-          mem::transmute::<BlockColliderInfoHandle, Option<NonZeroU32>>(BlockColliderInfoHandle(0))
-            == None
-        );
-        assert!(
-          mem::transmute::<BlockColliderInfoHandle, Option<NonZeroU32>>(BlockColliderInfoHandle(1))
-            == NonZeroU32::new(1)
-        );
-        chunklet.set(x, y, z, mem::transmute(new))
+    assert_eq!(
+      size_of::<BlockColliderInfoHandle>(),
+      size_of::<Option<NonZeroU32>>()
+    );
+    assert_eq!(
+      Self::handle_to_blockhandle(BlockColliderInfoHandle(0)),
+      None
+    );
+    assert_eq!(
+      Self::handle_to_blockhandle(BlockColliderInfoHandle(1)),
+      NonZeroU32::new(1)
+    );
+
+    let mut blocks = old_blocks;
+    blocks[Chunklet::index(x, y, z) as usize] = Self::handle_to_blockhandle(new);
+
+    if blocks.iter().all(|b| b.is_none()) {
+      self.chunklets.remove(&key);
+      if let Some(handle) = self.colliders.remove(&key) {
+        colliders.remove(handle, islands, bodies, true);
       }
     } else {
-      log::error!("no chunk at {cx} {cy} {cz}");
+      let c = Chunklet::new(cx, cy as i32, cz, blocks);
+      let arc = Arc::new(c);
+      self.chunklets.insert(key, arc.clone());
+      if let Some(handle) = self.colliders.remove(&key) {
+        colliders.remove(handle, islands, bodies, true);
+      }
+      let handle = colliders.insert(
+        ColliderBuilder::new(SharedShape(arc as Arc<dyn Shape>))
+          .translation(Vec3::new(
+            (cx * 16) as Real,
+            (cy as i32 * 16) as Real,
+            (cz * 16) as Real,
+          ))
+          .build(),
+      );
+      self.colliders.insert(key, handle);
     }
   }
   pub fn remove(
@@ -250,9 +284,39 @@ impl Chunklet {
       cz,
     }
   }
+  fn recompute_aabb(&mut self) {
+    let mut min = [u8::MAX, u8::MAX, u8::MAX];
+    let mut max = [u8::MIN, u8::MIN, u8::MIN];
+    let mut found = false;
+    for i in 0..CHUNK_VOLUME {
+      if self.blocks[i].is_some() {
+        found = true;
+        let (x, y, z) = Self::index_decode(i as u16);
+        min[0] = min[0].min(x);
+        min[1] = min[1].min(y);
+        min[2] = min[2].min(z);
+        max[0] = max[0].max(x);
+        max[1] = max[1].max(y);
+        max[2] = max[2].max(z);
+      }
+    }
+    if found {
+      self.aabb = Aabb::new(
+        Vec3::new(min[0] as f32, min[1] as f32, min[2] as f32),
+        Vec3::new(
+          (max[0] + 1) as f32,
+          (max[1] + 1) as f32,
+          (max[2] + 1) as f32,
+        ),
+      );
+    }
+  }
+
   #[inline(always)]
   pub fn set(&mut self, x: u8, y: u8, z: u8, value: Option<NonZeroU32>) {
     self.blocks[Self::index(x, y, z) as usize] = value;
+    self.tree.set_block(x, y, z, value.map(|x| x.get()));
+    self.recompute_aabb();
   }
 
   #[inline(always)]

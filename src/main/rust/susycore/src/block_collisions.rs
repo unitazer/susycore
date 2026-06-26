@@ -7,7 +7,7 @@ use jni::EnvUnowned;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
 use jni::sys::{jdouble, jfloat, jint, jlong};
 use ordered_float::OrderedFloat;
-use rapier3d::glamx::{Quat, usize};
+use rapier3d::glamx::Quat;
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::Aabb;
 use rapier3d::parry::shape::Cuboid;
@@ -27,6 +27,12 @@ pub struct ShapeCache(
 pub static SHAPE_CACHE: LazyLock<Mutex<ShapeCache>> =
   LazyLock::new(|| Mutex::new(ShapeCache::new()));
 pub static COLLIDERS: RwLock<ColliderStore> = RwLock::new(ColliderStore::new());
+
+pub fn clear_caches() {
+  COLLIDERS.write().unwrap().inner.clear();
+  SHAPE_CACHE.lock().unwrap().0.clear();
+}
+
 pub const AIR_HANDLE: BlockColliderInfoHandle = BlockColliderInfoHandle(0);
 #[derive(Eq, PartialOrd, Ord, PartialEq, Hash, Copy, Clone)]
 pub struct BlockColliderInfoHandle(pub(crate) u32);
@@ -41,7 +47,7 @@ pub struct MinecraftBlockColliderInfo {
 }
 
 pub struct ColliderStore {
-  inner: Vec<MinecraftBlockColliderInfo>,
+  pub inner: Vec<MinecraftBlockColliderInfo>,
 }
 
 impl ColliderStore {
@@ -180,10 +186,12 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
   //   "addChunk: world={}, subchunk=({}, {}, {})",
   //   world_id, x, y, z
   // );
-  if buffer.iter().all(|x| *x == 0) {
+  let non_zero_count = buffer.iter().filter(|x| **x != 0).count();
+  if non_zero_count == 0 {
     log::error!("empty subchunk supplied, shouldve been filtered out");
     return;
   }
+
   Scene::with_scene_mut(world_id as usize, |xs| {
     let b = buffer.map(|x| x as u32).map(|x| BlockColliderInfoHandle(x));
     let c = Chunklet::new_with_blockhandle(x, y, z, b);
@@ -242,6 +250,21 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_initialize(
 ) {
   debug_assert!(dimension >= 0);
   Scene::initialize_scene(dimension as usize, Vec3::new(0., gravity, 0.));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_destroyWorld(
+  _env: EnvUnowned,
+  _class: JClass,
+  dimension: jint,
+) {
+  Scene::destroy_scene(dimension as usize);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_reset(_env: EnvUnowned, _class: JClass) {
+  Scene::reset_all();
+  clear_caches();
 }
 
 #[unsafe(no_mangle)]
@@ -346,6 +369,9 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
       y as u8,
       z as u8,
       BlockColliderInfoHandle(new_data as u32),
+      &mut xs.collider_set,
+      &mut xs.island_manager,
+      &mut xs.rigid_body_set,
     );
 
     let block_world_x = (cx * 16 + x) as f32;

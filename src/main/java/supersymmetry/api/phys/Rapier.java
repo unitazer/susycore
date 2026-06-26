@@ -49,6 +49,18 @@ public class Rapier {
         initializedWorlds.put(world, Integer.valueOf(x));
     }
 
+    public static void destroyWorld(World world) {
+        Integer dim = initializedWorlds.remove(world);
+        if (dim != null) {
+            destroyWorld(dim);
+            if (initializedWorlds.isEmpty()) {
+                reset();
+                blockStateCache.clear();
+                entities.clear();
+            }
+        }
+    }
+
     public static void handleChunkAddition(Chunk chunk) {
         World world = chunk.getWorld();
         if (!initializedWorlds.containsKey(world)) {
@@ -295,4 +307,8 @@ public class Rapier {
     private static native void getEntityPose(int world_id, long collider_handle, double[] mut_array);
 
     private static native void addForceDebug(int world_id, long collider_handle, double fx, double fy, double fz);
+
+    private static native void destroyWorld(int dimension);
+
+    private static native void reset();
 }
