@@ -10,6 +10,7 @@ import supersymmetry.Supersymmetry;
 import supersymmetry.api.SusyLog;
 import supersymmetry.common.network.CPacketRocketInteract;
 import supersymmetry.common.network.SPacketFirstJoin;
+import supersymmetry.common.network.SPacketPocketBlockUpdate;
 import supersymmetry.common.network.SPacketRemoveFluidState;
 import supersymmetry.common.network.SPacketUpdateRenderMask;
 
@@ -32,5 +33,6 @@ public class SuSyCoreModule implements IGregTechModule {
         GregTechAPI.networkHandler.registerPacket(SPacketFirstJoin.class);
         GregTechAPI.networkHandler.registerPacket(CPacketRocketInteract.class);
         GregTechAPI.networkHandler.registerPacket(SPacketUpdateRenderMask.class);
+        GregTechAPI.networkHandler.registerPacket(SPacketPocketBlockUpdate.class);
     }
 }

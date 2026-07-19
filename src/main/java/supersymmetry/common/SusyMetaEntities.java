@@ -10,10 +10,12 @@ import supersymmetry.Supersymmetry;
 import supersymmetry.api.phys.CuboidEntityRender;
 import supersymmetry.api.phys.DebugCuboidEntity;
 import supersymmetry.api.phys.DebugSphereEntity;
+import supersymmetry.api.phys.PhysicsWorldEntity;
 import supersymmetry.api.phys.SphereEntityRender;
 import supersymmetry.client.renderer.handler.LanderRenderer;
 import supersymmetry.client.renderer.handler.entity.DroneRenderer;
 import supersymmetry.client.renderer.handler.entity.DropPodRenderer;
+import supersymmetry.client.renderer.handler.entity.RenderPhysicsWorldEntity;
 import supersymmetry.client.renderer.handler.entity.RocketRenderer;
 import supersymmetry.common.entities.*;
 
@@ -34,6 +36,8 @@ public class SusyMetaEntities {
                 DebugSphereEntity.class, "debug_sphere", 6, Supersymmetry.instance, 64, 3, false);
         EntityRegistry.registerModEntity(new ResourceLocation(Supersymmetry.MODID, "debug_cuboid"),
                 DebugCuboidEntity.class, "debug_cuboid", 7, Supersymmetry.instance, 64, 3, false);
+        EntityRegistry.registerModEntity(new ResourceLocation(Supersymmetry.MODID, "physics_world"),
+                PhysicsWorldEntity.class, "physics_world", 8, Supersymmetry.instance, 256, 1, false);
     }
 
     @SideOnly(Side.CLIENT)
@@ -44,5 +48,6 @@ public class SusyMetaEntities {
         RenderingRegistry.registerEntityRenderingHandler(EntityRocket.class, RocketRenderer::new);
         RenderingRegistry.registerEntityRenderingHandler(DebugSphereEntity.class, SphereEntityRender::new);
         RenderingRegistry.registerEntityRenderingHandler(DebugCuboidEntity.class, CuboidEntityRender::new);
+        RenderingRegistry.registerEntityRenderingHandler(PhysicsWorldEntity.class, RenderPhysicsWorldEntity::new);
     }
 }
