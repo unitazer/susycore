@@ -37,11 +37,15 @@ import org.jetbrains.annotations.Nullable;
 
 import com.google.gson.*;
 
+import gregtech.api.GTValues;
 import gregtech.api.GregTechAPI;
+import gregtech.api.metatileentity.ITieredMetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.WorkableTieredMetaTileEntity;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.CleanroomType;
+import gregtech.api.metatileentity.multiblock.IMultiblockAbilityPart;
+import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.pattern.BlockPattern;
 import gregtech.api.pattern.TraceabilityPredicate;
@@ -59,7 +63,12 @@ import gregtech.api.unification.material.Materials;
 import gregtech.api.unification.material.properties.*;
 import gregtech.api.unification.stack.MaterialStack;
 import gregtech.api.unification.stack.UnificationEntry;
+import gregtech.common.blocks.BlockWireCoil;
 import gregtech.common.crafting.GTFluidCraftingIngredient;
+import gregtech.common.metatileentities.multi.multiblockpart.*;
+import gregtech.common.pipelike.cable.Insulation;
+import gregtech.common.pipelike.fluidpipe.FluidPipeType;
+import gregtech.common.pipelike.itempipe.ItemPipeType;
 import gregtech.core.unification.material.internal.MaterialRegistryManager;
 import it.unimi.dsi.fastutil.ints.IntList;
 import supersymmetry.api.SusyLog;
@@ -70,6 +79,12 @@ public class CommandRecipemapDump extends CommandBase {
 
     private static final Field BLOCK_MATCHES;
     private static final Field IS_CENTER;
+    private static final Field ITEM_PIPE_RESISTANCE;
+    private static final Field ENERGY_HATCH_AMPERAGE;
+    private static final Field MUFFLER_RECOVERY_CHANCE;
+    private static final Field ENERGY_HATCH_IS_EXPORT;
+    private static final Field NOTIFIABLE_IS_EXPORT;
+    private static final java.lang.reflect.Method ITEM_BUS_INVENTORY_SIZE;
 
     static {
         try {
@@ -77,7 +92,19 @@ public class CommandRecipemapDump extends CommandBase {
             BLOCK_MATCHES.setAccessible(true);
             IS_CENTER = TraceabilityPredicate.class.getDeclaredField("isCenter");
             IS_CENTER.setAccessible(true);
-        } catch (NoSuchFieldException e) {
+            ITEM_PIPE_RESISTANCE = ItemPipeType.class.getDeclaredField("resistanceMultiplier");
+            ITEM_PIPE_RESISTANCE.setAccessible(true);
+            ENERGY_HATCH_AMPERAGE = MetaTileEntityEnergyHatch.class.getDeclaredField("amperage");
+            ENERGY_HATCH_AMPERAGE.setAccessible(true);
+            MUFFLER_RECOVERY_CHANCE = MetaTileEntityMufflerHatch.class.getDeclaredField("recoveryChance");
+            MUFFLER_RECOVERY_CHANCE.setAccessible(true);
+            ENERGY_HATCH_IS_EXPORT = MetaTileEntityEnergyHatch.class.getDeclaredField("isExportHatch");
+            ENERGY_HATCH_IS_EXPORT.setAccessible(true);
+            NOTIFIABLE_IS_EXPORT = MetaTileEntityMultiblockNotifiablePart.class.getDeclaredField("isExportHatch");
+            NOTIFIABLE_IS_EXPORT.setAccessible(true);
+            ITEM_BUS_INVENTORY_SIZE = MetaTileEntityItemBus.class.getDeclaredMethod("getInventorySize");
+            ITEM_BUS_INVENTORY_SIZE.setAccessible(true);
+        } catch (ReflectiveOperationException e) {
             throw new RuntimeException(e);
         }
     }
@@ -166,6 +193,20 @@ public class CommandRecipemapDump extends CommandBase {
         return propertyArray;
     }
 
+    private static String getAbilityName(MultiblockAbility<?> ability) {
+        for (var entry : MultiblockAbility.NAME_REGISTRY.entrySet()) {
+            if (entry.getValue() == ability) return entry.getKey();
+        }
+        return null;
+    }
+
+    private static int parseTierSuffix(String suffix) {
+        for (int i = 0; i < GTValues.VN.length; i++) {
+            if (GTValues.VN[i].equalsIgnoreCase(suffix)) return i;
+        }
+        return -1;
+    }
+
     private Map<Material, List<ItemStack>> itemStorage = new HashMap<>();
     private Map<Material, List<Fluid>> fluidStorage = new HashMap<>();
 
@@ -184,16 +225,21 @@ public class CommandRecipemapDump extends CommandBase {
         itemStorage.clear();
         fluidStorage.clear();
 
-        Map<String, Supplier<JsonElement>> fns = Map.of(
-                "items", () -> this.dumpItems(),
-                "fluids", () -> this.dumpFluids(),
-                "oreDict", () -> this.dumpOreDict(),
-                "recipemaps", () -> this.gtRecipeMaps(),
-                "smelting", () -> this.dumpSmeltingRecipes(),
-                "crafting", () -> this.dumpCraftingRecipes(),
-                "gtMTEs", () -> this.dumpMachines(),
-                "multi", () -> this.dumpMultis(),
-                "materials", () -> this.dumpMaterials());
+        Map<String, Supplier<JsonElement>> fns = Map.ofEntries(
+                Map.entry("items", () -> this.dumpItems()),
+                Map.entry("fluids", () -> this.dumpFluids()),
+                Map.entry("oreDict", () -> this.dumpOreDict()),
+                Map.entry("recipemaps", () -> this.gtRecipeMaps()),
+                Map.entry("smelting", () -> this.dumpSmeltingRecipes()),
+                Map.entry("crafting", () -> this.dumpCraftingRecipes()),
+                Map.entry("gtMTEs", () -> this.dumpMachines()),
+                Map.entry("multi", () -> this.dumpMultis()),
+                Map.entry("materials", () -> this.dumpMaterials()),
+                Map.entry("pipeTypes", () -> this.dumpPipeTypes()),
+                Map.entry("cableTypes", () -> this.dumpCableTypes()),
+                Map.entry("coverTypes", () -> this.dumpCoverTypes()),
+                Map.entry("hatchTypes", () -> this.dumpHatchTypes()),
+                Map.entry("cleanroomTypes", () -> this.dumpCleanroomTypes()));
         if (args.length == 0) {
             this.runAll(sender, fns);
             return;
@@ -478,6 +524,249 @@ public class CommandRecipemapDump extends CommandBase {
         return root;
     }
 
+    public JsonElement dumpPipeTypes() {
+        var root = new JsonObject();
+
+        var fluidPipes = new JsonArray();
+        for (var type : FluidPipeType.VALUES) {
+            var obj = new JsonObject();
+            obj.addProperty("name", type.name);
+            obj.addProperty("thickness", type.thickness);
+            obj.addProperty("capacityMultiplier", type.capacityMultiplier);
+            obj.addProperty("channels", type.channels);
+            fluidPipes.add(obj);
+        }
+        root.add("fluid", fluidPipes);
+
+        var itemPipes = new JsonArray();
+        for (var type : ItemPipeType.VALUES) {
+            var obj = new JsonObject();
+            obj.addProperty("name", type.name);
+            obj.addProperty("thickness", type.getThickness());
+            obj.addProperty("rateMultiplier", type.getRateMultiplier());
+            try {
+                obj.addProperty("resistanceMultiplier", (float) ITEM_PIPE_RESISTANCE.get(type));
+            } catch (IllegalAccessException e) {
+                throw new RuntimeException(e);
+            }
+            obj.addProperty("isRestrictive", type.isRestrictive());
+            itemPipes.add(obj);
+        }
+        root.add("item", itemPipes);
+
+        var fluidPipeMaterials = new JsonArray();
+        for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
+            if (!mat.hasProperty(PropertyKey.FLUID_PIPE)) continue;
+            var base = mat.getProperty(PropertyKey.FLUID_PIPE);
+            for (var type : FluidPipeType.VALUES) {
+                var obj = new JsonObject();
+                obj.addProperty("material", mat.getRegistryName());
+                obj.addProperty("pipeType", type.name);
+                var modified = type.modifyProperties(base);
+                obj.addProperty("throughput", modified.getThroughput());
+                obj.addProperty("channels", modified.getTanks());
+                obj.addProperty("maxTemperature", modified.getMaxFluidTemperature());
+                obj.addProperty("gasProof", modified.isGasProof());
+                obj.addProperty("acidProof", modified.isAcidProof());
+                obj.addProperty("cryoProof", modified.isCryoProof());
+                obj.addProperty("plasmaProof", modified.isPlasmaProof());
+                fluidPipeMaterials.add(obj);
+            }
+        }
+        root.add("fluidPipeMaterials", fluidPipeMaterials);
+
+        var itemPipeMaterials = new JsonArray();
+        for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
+            if (!mat.hasProperty(PropertyKey.ITEM_PIPE)) continue;
+            var base = mat.getProperty(PropertyKey.ITEM_PIPE);
+            for (var type : ItemPipeType.VALUES) {
+                var obj = new JsonObject();
+                obj.addProperty("material", mat.getRegistryName());
+                obj.addProperty("pipeType", type.name);
+                var modified = type.modifyProperties(base);
+                obj.addProperty("transferRate", modified.getTransferRate());
+                obj.addProperty("priority", modified.getPriority());
+                itemPipeMaterials.add(obj);
+            }
+        }
+        root.add("itemPipeMaterials", itemPipeMaterials);
+
+        return root;
+    }
+
+    public JsonElement dumpCableTypes() {
+        var root = new JsonObject();
+
+        var insulation = new JsonArray();
+        for (var ins : Insulation.VALUES) {
+            var obj = new JsonObject();
+            obj.addProperty("name", ins.name);
+            obj.addProperty("thickness", ins.thickness);
+            obj.addProperty("amperage", ins.amperage);
+            obj.addProperty("lossMultiplier", ins.lossMultiplier);
+            obj.addProperty("insulationLevel", ins.insulationLevel);
+            obj.addProperty("isCable", ins.isCable());
+            insulation.add(obj);
+        }
+        root.add("insulation", insulation);
+
+        var coils = new JsonArray();
+        for (var coil : BlockWireCoil.CoilType.values()) {
+            var obj = new JsonObject();
+            obj.addProperty("name", coil.getName());
+            obj.addProperty("coilTemperature", coil.getCoilTemperature());
+            obj.addProperty("level", coil.getLevel());
+            obj.addProperty("energyDiscount", coil.getEnergyDiscount());
+            if (coil.getMaterial() != null) {
+                obj.addProperty("material", coil.getMaterial().getRegistryName());
+            }
+            coils.add(obj);
+        }
+        root.add("coils", coils);
+
+        var cables = new JsonArray();
+        for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
+            if (!mat.hasProperty(PropertyKey.WIRE)) continue;
+            var base = mat.getProperty(PropertyKey.WIRE);
+            for (var ins : Insulation.VALUES) {
+                var obj = new JsonObject();
+                obj.addProperty("material", mat.getRegistryName());
+                obj.addProperty("insulation", ins.name);
+                var modified = ins.modifyProperties(base);
+                obj.addProperty("voltage", modified.getVoltage());
+                obj.addProperty("amperage", modified.getAmperage());
+                obj.addProperty("lossPerBlock", modified.getLossPerBlock());
+                obj.addProperty("isSuperconductor", modified.isSuperconductor());
+                cables.add(obj);
+            }
+        }
+        root.add("cables", cables);
+
+        return root;
+    }
+
+    private static int coverRate(String baseType, int tier) {
+        if (baseType.equals("conveyor") || baseType.equals("robotic_arm")) {
+            if (tier <= 1) return 8;
+            if (tier == 2) return 32;
+            if (tier == 3) return 64;
+            if (tier == 4) return 192;
+            return 1024;
+        }
+        if (baseType.equals("pump") || baseType.equals("fluid.regulator")) {
+            if (tier <= 1) return 1280;
+            if (tier == 2) return 5120;
+            if (tier == 3) return 20480;
+            if (tier == 4) return 81920;
+            if (tier == 5) return 327680;
+            if (tier == 6) return 1310720;
+            if (tier == 7) return 5242880;
+            return 20971520;
+        }
+        return -1;
+    }
+
+    private static boolean coverSupportsExact(String baseType) {
+        return baseType.equals("robotic_arm") || baseType.equals("fluid.regulator");
+    }
+
+    public JsonElement dumpCoverTypes() {
+        var root = new JsonObject();
+        for (var key : GregTechAPI.COVER_REGISTRY.getKeys()) {
+            var obj = new JsonObject();
+            obj.addProperty("id", key.toString());
+
+            var path = key.getPath();
+            var parts = path.split("\\.");
+            if (parts.length >= 2) {
+                var suffix = parts[parts.length - 1];
+                var tier = parseTierSuffix(suffix);
+                obj.addProperty("tierSuffix", suffix);
+
+                var baseType = String.join(".", java.util.Arrays.copyOf(parts, parts.length - 1));
+                obj.addProperty("baseType", baseType);
+
+                if (tier >= 0) {
+                    obj.addProperty("tier", tier);
+                    var rate = coverRate(baseType, tier);
+                    if (rate >= 0) {
+                        obj.addProperty("rate", rate);
+                    }
+                    obj.addProperty("supportsExactAmount", coverSupportsExact(baseType));
+                }
+            }
+
+            root.add(key.toString(), obj);
+        }
+        return root;
+    }
+
+    public JsonElement dumpHatchTypes() {
+        var root = new JsonObject();
+        for (var key : GregTechAPI.MTE_REGISTRY.getKeys()) {
+            var mte = GregTechAPI.MTE_REGISTRY.getObject(key);
+            if (!(mte instanceof IMultiblockAbilityPart abilityPart)) continue;
+
+            var obj = new JsonObject();
+            obj.addProperty("metaName", mte.getMetaName());
+            obj.addProperty("class", mte.getClass().getName());
+
+            var ability = getAbilityName(abilityPart.getAbility());
+            if (ability != null) {
+                obj.addProperty("ability", ability);
+            }
+
+            if (mte instanceof ITieredMetaTileEntity tiered) {
+                obj.addProperty("tier", tiered.getTier());
+            }
+
+            if (mte instanceof MetaTileEntityEnergyHatch energyHatch) {
+                try {
+                    obj.addProperty("isExport", ENERGY_HATCH_IS_EXPORT.getBoolean(energyHatch));
+                    obj.addProperty("amperage", ENERGY_HATCH_AMPERAGE.getInt(energyHatch));
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+            } else if (mte instanceof MetaTileEntityItemBus itemBus) {
+                try {
+                    obj.addProperty("isExport", NOTIFIABLE_IS_EXPORT.getBoolean(itemBus));
+                    obj.addProperty("inventorySize", (Integer) ITEM_BUS_INVENTORY_SIZE.invoke(itemBus));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            } else if (mte instanceof MetaTileEntityFluidHatch fluidHatch) {
+                try {
+                    obj.addProperty("isExport", NOTIFIABLE_IS_EXPORT.getBoolean(fluidHatch));
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+                var tier = fluidHatch.getTier();
+                obj.addProperty("tankCapacity", 8000 * (1 << Math.min(9, tier)));
+            } else if (mte instanceof MetaTileEntityMufflerHatch) {
+                try {
+                    obj.addProperty("recoveryChance", MUFFLER_RECOVERY_CHANCE.getInt(mte));
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            root.add(key.toString(), obj);
+        }
+        return root;
+    }
+
+    public JsonElement dumpCleanroomTypes() {
+        //shrug
+        var root = new JsonObject();
+        for (var type : List.of(CleanroomType.CLEANROOM, CleanroomType.STERILE_CLEANROOM)) {
+            var obj = new JsonObject();
+            obj.addProperty("name", type.getName());
+            obj.addProperty("translationKey", type.getTranslationKey());
+            root.add(type.getName(), obj);
+        }
+        return root;
+    }
+
     private void runAll(ICommandSender sender, Map<String, Supplier<JsonElement>> funcMap) {
         JsonObject root = new JsonObject();
         for (Map.Entry<String, Supplier<JsonElement>> e : funcMap.entrySet()) {
@@ -500,6 +789,8 @@ public class CommandRecipemapDump extends CommandBase {
             var multiObj = new JsonObject();
             multiObj.addProperty("class", mte.getClass().getName());
             multiObj.addProperty("metaName", mte.getMetaName());
+            multiObj.addProperty("allowsExtendedFacing", multiblock.allowsExtendedFacing());
+            multiObj.addProperty("allowsFlip", multiblock.allowsFlip());
 
             var pattern = multiblock.structurePattern;
             if (pattern == null) continue;
@@ -561,6 +852,25 @@ public class CommandRecipemapDump extends CommandBase {
                 symObj.addProperty("isSingle", predicate.isSingle());
                 symObj.add("common", simplePredicatesToJson(predicate.common));
                 symObj.add("limited", simplePredicatesToJson(predicate.limited));
+
+                var abilities = new JsonArray();
+                var seen = new HashSet<String>();
+                for (var sp : predicate.common) {
+                    if (sp.candidates == null) continue;
+                    for (var info : sp.candidates.get()) {
+                        if (info.getTileEntity() instanceof IGregTechTileEntity gtTe &&
+                                gtTe.getMetaTileEntity() instanceof IMultiblockAbilityPart<?>ap) {
+                            var name = getAbilityName(ap.getAbility());
+                            if (name != null && seen.add(name)) {
+                                abilities.add(name);
+                            }
+                        }
+                    }
+                }
+                if (abilities.size() > 0) {
+                    symObj.add("abilities", abilities);
+                }
+
                 symbols.add(String.valueOf(c), symObj);
             }
             multiObj.add("symbols", symbols);
