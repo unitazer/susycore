@@ -225,7 +225,7 @@ public class CommandRecipemapDump extends CommandBase {
     public void execute(MinecraftServer server, ICommandSender sender, String[] args) throws CommandException {
         itemStorage.clear();
         fluidStorage.clear();
-
+        // had to do this because java is a horrible language and Map.of only goes up to 10 elements
         Map<String, Supplier<JsonElement>> fns = Map.ofEntries(
                 Map.entry("items", () -> this.dumpItems()),
                 Map.entry("fluids", () -> this.dumpFluids()),
