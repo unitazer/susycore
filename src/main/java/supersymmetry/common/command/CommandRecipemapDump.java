@@ -239,8 +239,7 @@ public class CommandRecipemapDump extends CommandBase {
                 Map.entry("pipeTypes", () -> this.dumpPipeTypes()),
                 Map.entry("cableTypes", () -> this.dumpCableTypes()),
                 Map.entry("coverTypes", () -> this.dumpCoverTypes()),
-                Map.entry("hatchTypes", () -> this.dumpHatchTypes()),
-                Map.entry("cleanroomTypes", () -> this.dumpCleanroomTypes()));
+                Map.entry("hatchTypes", () -> this.dumpHatchTypes()));
         if (args.length == 0) {
             this.runAll(sender, fns);
             return;
@@ -641,6 +640,7 @@ public class CommandRecipemapDump extends CommandBase {
         return root;
     }
 
+    // see CoverBehaviors.java registerBehavior(), dont think that you can pull them out
     private static int coverRate(String baseType, int tier) {
         if (baseType.equals("conveyor") || baseType.equals("robotic_arm")) {
             if (tier <= 1) return 8;
@@ -751,18 +751,6 @@ public class CommandRecipemapDump extends CommandBase {
         return root;
     }
 
-    public JsonElement dumpCleanroomTypes() {
-        // shrug
-        var root = new JsonObject();
-        for (var type : List.of(CleanroomType.CLEANROOM, CleanroomType.STERILE_CLEANROOM)) {
-            var obj = new JsonObject();
-            obj.addProperty("name", type.getName());
-            obj.addProperty("translationKey", type.getTranslationKey());
-            root.add(type.getName(), obj);
-        }
-        return root;
-    }
-
     private void runAll(ICommandSender sender, Map<String, Supplier<JsonElement>> funcMap) {
         JsonObject root = new JsonObject();
         for (Map.Entry<String, Supplier<JsonElement>> e : funcMap.entrySet()) {
@@ -853,7 +841,9 @@ public class CommandRecipemapDump extends CommandBase {
                 var seen = new HashSet<String>();
                 for (var sp : predicate.common) {
                     if (sp.candidates == null) continue;
-                    for (var info : sp.candidates.get()) {
+                    var infos = sp.candidates.get();
+                    if (infos == null) continue;
+                    for (var info : infos) {
                         if (info.getTileEntity() instanceof IGregTechTileEntity gtTe &&
                                 gtTe.getMetaTileEntity() instanceof IMultiblockAbilityPart<?>ap) {
                             var name = getAbilityName(ap.getAbility());
@@ -888,24 +878,27 @@ public class CommandRecipemapDump extends CommandBase {
 
             var candArr = new JsonArray();
             if (sp.candidates != null) {
-                for (var info : sp.candidates.get()) {
-                    var candObj = new JsonObject();
-                    var state = info.getBlockState();
-                    var block = state.getBlock();
-                    var regName = block.getRegistryName();
-                    if (regName != null) {
-                        candObj.addProperty("block", regName.toString());
-                        candObj.addProperty("meta", block.damageDropped(state));
-                    }
-                    if (info.getTileEntity() instanceof IGregTechTileEntity gtTe) {
-                        var stack = gtTe.getMetaTileEntity().getStackForm();
-                        var itemReg = stack.getItem().getRegistryName();
-                        if (itemReg != null) {
-                            candObj.addProperty("item", itemReg.toString());
-                            candObj.addProperty("itemMeta", stack.getItemDamage());
+                var infos = sp.candidates.get();
+                if (infos != null) {
+                    for (var info : infos) {
+                        var candObj = new JsonObject();
+                        var state = info.getBlockState();
+                        var block = state.getBlock();
+                        var regName = block.getRegistryName();
+                        if (regName != null) {
+                            candObj.addProperty("block", regName.toString());
+                            candObj.addProperty("meta", block.damageDropped(state));
                         }
+                        if (info.getTileEntity() instanceof IGregTechTileEntity gtTe) {
+                            var stack = gtTe.getMetaTileEntity().getStackForm();
+                            var itemReg = stack.getItem().getRegistryName();
+                            if (itemReg != null) {
+                                candObj.addProperty("item", itemReg.toString());
+                                candObj.addProperty("itemMeta", stack.getItemDamage());
+                            }
+                        }
+                        candArr.add(candObj);
                     }
-                    candArr.add(candObj);
                 }
             }
             obj.add("candidates", candArr);
