@@ -47,6 +47,7 @@ import gregtech.api.metatileentity.multiblock.CleanroomType;
 import gregtech.api.metatileentity.multiblock.IMultiblockAbilityPart;
 import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
+import gregtech.api.metatileentity.multiblock.RecipeMapMultiblockController;
 import gregtech.api.pattern.BlockPattern;
 import gregtech.api.pattern.TraceabilityPredicate;
 import gregtech.api.recipes.Recipe;
@@ -512,11 +513,19 @@ public class CommandRecipemapDump extends CommandBase {
             machineObj.addProperty("isController", machine instanceof MultiblockControllerBase);
             if (machine instanceof WorkableTieredMetaTileEntity tiered) {
                 machineObj.addProperty("tier", tiered.getTier());
-                machineObj.addProperty("recipemapName", tiered.getRecipeMap().getUnlocalizedName()); // the recipe maps
-                                                                                                     // are dumped
+                machineObj.addProperty("recipemapName", tiered.getRecipeMap().getUnlocalizedName());
                 machineObj.addProperty("workable", tiered.getRecipeLogic().getName());
-                machineObj.addProperty("workableParallelLogicType",
-                        tiered.getRecipeLogic().getParallelLogicType().toString());
+                machineObj.addProperty(
+                        "workableParallelLogicType", tiered.getRecipeLogic().getParallelLogicType().toString());
+            } else if (machine instanceof RecipeMapMultiblockController mm) {
+                if (mm.recipeMap != null) {
+                    machineObj.addProperty("recipemapName", mm.recipeMap.getUnlocalizedName());
+                }
+                var workable = mm.getRecipeMapWorkable();
+                if (workable != null) {
+                    machineObj.addProperty("workable", workable.getName());
+                    machineObj.addProperty("workableParallelLogicType", workable.getParallelLogicType().toString());
+                }
             }
             root.add(key.toString(), machineObj);
         }
@@ -527,18 +536,34 @@ public class CommandRecipemapDump extends CommandBase {
     public JsonElement dumpPipeTypes() {
         var root = new JsonObject();
 
-        var fluidPipes = new JsonArray();
+        var fluidSizes = new JsonArray();
         for (var type : FluidPipeType.VALUES) {
             var obj = new JsonObject();
             obj.addProperty("name", type.name);
             obj.addProperty("thickness", type.thickness);
             obj.addProperty("capacityMultiplier", type.capacityMultiplier);
             obj.addProperty("channels", type.channels);
-            fluidPipes.add(obj);
+            fluidSizes.add(obj);
         }
-        root.add("fluid", fluidPipes);
+        root.add("fluid", fluidSizes);
 
-        var itemPipes = new JsonArray();
+        var fluidMaterials = new JsonArray();
+        for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
+            if (!mat.hasProperty(PropertyKey.FLUID_PIPE)) continue;
+            var base = mat.getProperty(PropertyKey.FLUID_PIPE);
+            var matObj = new JsonObject();
+            matObj.addProperty("name", mat.getRegistryName());
+            matObj.addProperty("maxTemperature", base.getMaxFluidTemperature());
+            matObj.addProperty("throughput", base.getThroughput());
+            matObj.addProperty("gasProof", base.isGasProof());
+            matObj.addProperty("acidProof", base.isAcidProof());
+            matObj.addProperty("cryoProof", base.isCryoProof());
+            matObj.addProperty("plasmaProof", base.isPlasmaProof());
+            fluidMaterials.add(matObj);
+        }
+        root.add("fluidMaterials", fluidMaterials);
+
+        var itemSizes = new JsonArray();
         for (var type : ItemPipeType.VALUES) {
             var obj = new JsonObject();
             obj.addProperty("name", type.name);
@@ -550,46 +575,21 @@ public class CommandRecipemapDump extends CommandBase {
                 throw new RuntimeException(e);
             }
             obj.addProperty("isRestrictive", type.isRestrictive());
-            itemPipes.add(obj);
+            itemSizes.add(obj);
         }
-        root.add("item", itemPipes);
+        root.add("item", itemSizes);
 
-        var fluidPipeMaterials = new JsonArray();
-        for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
-            if (!mat.hasProperty(PropertyKey.FLUID_PIPE)) continue;
-            var base = mat.getProperty(PropertyKey.FLUID_PIPE);
-            for (var type : FluidPipeType.VALUES) {
-                var obj = new JsonObject();
-                obj.addProperty("material", mat.getRegistryName());
-                obj.addProperty("pipeType", type.name);
-                var modified = type.modifyProperties(base);
-                obj.addProperty("throughput", modified.getThroughput());
-                obj.addProperty("channels", modified.getTanks());
-                obj.addProperty("maxTemperature", modified.getMaxFluidTemperature());
-                obj.addProperty("gasProof", modified.isGasProof());
-                obj.addProperty("acidProof", modified.isAcidProof());
-                obj.addProperty("cryoProof", modified.isCryoProof());
-                obj.addProperty("plasmaProof", modified.isPlasmaProof());
-                fluidPipeMaterials.add(obj);
-            }
-        }
-        root.add("fluidPipeMaterials", fluidPipeMaterials);
-
-        var itemPipeMaterials = new JsonArray();
+        var itemMaterials = new JsonArray();
         for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
             if (!mat.hasProperty(PropertyKey.ITEM_PIPE)) continue;
             var base = mat.getProperty(PropertyKey.ITEM_PIPE);
-            for (var type : ItemPipeType.VALUES) {
-                var obj = new JsonObject();
-                obj.addProperty("material", mat.getRegistryName());
-                obj.addProperty("pipeType", type.name);
-                var modified = type.modifyProperties(base);
-                obj.addProperty("transferRate", modified.getTransferRate());
-                obj.addProperty("priority", modified.getPriority());
-                itemPipeMaterials.add(obj);
-            }
+            var matObj = new JsonObject();
+            matObj.addProperty("name", mat.getRegistryName());
+            matObj.addProperty("transferRate", base.getTransferRate());
+            matObj.addProperty("priority", base.getPriority());
+            itemMaterials.add(matObj);
         }
-        root.add("itemPipeMaterials", itemPipeMaterials);
+        root.add("itemMaterials", itemMaterials);
 
         return root;
     }
@@ -597,7 +597,7 @@ public class CommandRecipemapDump extends CommandBase {
     public JsonElement dumpCableTypes() {
         var root = new JsonObject();
 
-        var insulation = new JsonArray();
+        var insTypes = new JsonArray();
         for (var ins : Insulation.VALUES) {
             var obj = new JsonObject();
             obj.addProperty("name", ins.name);
@@ -606,9 +606,23 @@ public class CommandRecipemapDump extends CommandBase {
             obj.addProperty("lossMultiplier", ins.lossMultiplier);
             obj.addProperty("insulationLevel", ins.insulationLevel);
             obj.addProperty("isCable", ins.isCable());
-            insulation.add(obj);
+            insTypes.add(obj);
         }
-        root.add("insulation", insulation);
+        root.add("insTypes", insTypes);
+
+        var wireMaterials = new JsonArray();
+        for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
+            if (!mat.hasProperty(PropertyKey.WIRE)) continue;
+            var base = mat.getProperty(PropertyKey.WIRE);
+            var matObj = new JsonObject();
+            matObj.addProperty("name", mat.getRegistryName());
+            matObj.addProperty("voltage", base.getVoltage());
+            matObj.addProperty("amperage", base.getAmperage());
+            matObj.addProperty("lossPerBlock", base.getLossPerBlock());
+            matObj.addProperty("isSuperconductor", base.isSuperconductor());
+            wireMaterials.add(matObj);
+        }
+        root.add("materials", wireMaterials);
 
         var coils = new JsonArray();
         for (var coil : BlockWireCoil.CoilType.values()) {
@@ -623,24 +637,6 @@ public class CommandRecipemapDump extends CommandBase {
             coils.add(obj);
         }
         root.add("coils", coils);
-
-        var cables = new JsonArray();
-        for (var mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
-            if (!mat.hasProperty(PropertyKey.WIRE)) continue;
-            var base = mat.getProperty(PropertyKey.WIRE);
-            for (var ins : Insulation.VALUES) {
-                var obj = new JsonObject();
-                obj.addProperty("material", mat.getRegistryName());
-                obj.addProperty("insulation", ins.name);
-                var modified = ins.modifyProperties(base);
-                obj.addProperty("voltage", modified.getVoltage());
-                obj.addProperty("amperage", modified.getAmperage());
-                obj.addProperty("lossPerBlock", modified.getLossPerBlock());
-                obj.addProperty("isSuperconductor", modified.isSuperconductor());
-                cables.add(obj);
-            }
-        }
-        root.add("cables", cables);
 
         return root;
     }
@@ -756,7 +752,7 @@ public class CommandRecipemapDump extends CommandBase {
     }
 
     public JsonElement dumpCleanroomTypes() {
-        //shrug
+        // shrug
         var root = new JsonObject();
         for (var type : List.of(CleanroomType.CLEANROOM, CleanroomType.STERILE_CLEANROOM)) {
             var obj = new JsonObject();
