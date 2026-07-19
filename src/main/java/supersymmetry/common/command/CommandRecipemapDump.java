@@ -3,6 +3,7 @@ package supersymmetry.common.command;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.function.Supplier;
@@ -39,8 +40,11 @@ import com.google.gson.*;
 import gregtech.api.GregTechAPI;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.WorkableTieredMetaTileEntity;
+import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.CleanroomType;
 import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
+import gregtech.api.pattern.BlockPattern;
+import gregtech.api.pattern.TraceabilityPredicate;
 import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.RecipeMap;
 import gregtech.api.recipes.ingredients.GTRecipeInput;
@@ -64,8 +68,19 @@ import supersymmetry.api.recipes.properties.MixerSettlerCellsProperty;
 
 public class CommandRecipemapDump extends CommandBase {
 
-    private Map<Material, List<ItemStack>> itemStorage = new HashMap<>();
-    private Map<Material, List<Fluid>> fluidStorage = new HashMap<>();
+    private static final Field BLOCK_MATCHES;
+    private static final Field IS_CENTER;
+
+    static {
+        try {
+            BLOCK_MATCHES = BlockPattern.class.getDeclaredField("blockMatches");
+            BLOCK_MATCHES.setAccessible(true);
+            IS_CENTER = TraceabilityPredicate.class.getDeclaredField("isCenter");
+            IS_CENTER.setAccessible(true);
+        } catch (NoSuchFieldException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     public static JsonElement nbtToJson(NBTBase nbt) {
         if (nbt == null) {
@@ -107,6 +122,53 @@ public class CommandRecipemapDump extends CommandBase {
             throw new IllegalArgumentException("weird nbt class" + nbt.getClass());
     }
 
+    public static @Nullable Material getMaterialFromFluid(@Nullable Fluid fluid) {
+        if (fluid == null) {
+            return null;
+        }
+        Material material = FluidUnifier.getMaterialFromFluid(fluid);
+
+        if (material == null) {
+            // You do have to check FluidRegistry separately.
+            // The wonders of experimental API!
+            if (fluid == FluidRegistry.WATER) {
+                return Materials.Water;
+            } else if (fluid == FluidRegistry.LAVA) {
+                return Materials.Lava;
+            }
+        }
+        return material;
+    }
+
+    private static @NotNull JsonArray getPropertiesArray(Recipe recipe) {
+        JsonArray propertyArray = new JsonArray();
+        for (Entry<RecipeProperty<?>, Object> propEntry : recipe.getPropertyValues()) {
+            JsonObject propdesc = new JsonObject();
+            String key = propEntry.getKey().getKey();
+            propdesc.addProperty("propertyKey", key);
+            if (key.equals(DimensionProperty.KEY)) { // dimension
+                JsonArray arr = new JsonArray();
+                for (int dim : (IntList) propEntry.getValue()) {
+                    arr.add(dim);
+                }
+                propdesc.add("dimensions", arr);
+            } else if (key.equals(CleanroomProperty.KEY)) { // cleanroom
+                propdesc.addProperty("cleanroom", ((CleanroomType) propEntry.getValue()).getName());
+            } else if (key.equals(TemperatureProperty.KEY)) { // temperature
+                propdesc.addProperty("temperature", (int) propEntry.getValue());
+            } else if (key.equals(MixerSettlerCellsProperty.KEY)) { // mixer_settler_cells
+                propdesc.addProperty("cells", (int) propEntry.getValue());
+            } else if (key.equals(FusionEUToStartProperty.KEY)) { // eu_to_start
+                propdesc.addProperty("eu_to_start", (long) propEntry.getValue());
+            }
+            propertyArray.add(propdesc);
+        }
+        return propertyArray;
+    }
+
+    private Map<Material, List<ItemStack>> itemStorage = new HashMap<>();
+    private Map<Material, List<Fluid>> fluidStorage = new HashMap<>();
+
     @Override
     public String getName() {
         return "recipemapdump";
@@ -122,10 +184,16 @@ public class CommandRecipemapDump extends CommandBase {
         itemStorage.clear();
         fluidStorage.clear();
 
-        Map<String, Supplier<JsonElement>> fns = Map.of("items", () -> this.dumpItems(), "fluids",
-                () -> this.dumpFluids(), "oreDict", () -> this.dumpOreDict(), "recipemaps", () -> this.gtRecipeMaps(),
-                "smelting", () -> this.dumpSmeltingRecipes(), "crafting", () -> this.dumpCraftingRecipes(), "gtMTEs",
-                () -> this.dumpMachines(), "materials", () -> this.dumpMaterials());
+        Map<String, Supplier<JsonElement>> fns = Map.of(
+                "items", () -> this.dumpItems(),
+                "fluids", () -> this.dumpFluids(),
+                "oreDict", () -> this.dumpOreDict(),
+                "recipemaps", () -> this.gtRecipeMaps(),
+                "smelting", () -> this.dumpSmeltingRecipes(),
+                "crafting", () -> this.dumpCraftingRecipes(),
+                "gtMTEs", () -> this.dumpMachines(),
+                "multi", () -> this.dumpMultis(),
+                "materials", () -> this.dumpMaterials());
         if (args.length == 0) {
             this.runAll(sender, fns);
             return;
@@ -149,117 +217,12 @@ public class CommandRecipemapDump extends CommandBase {
         this.writeJsonToRoot(root, "recipedump", sender);
     }
 
-    private void runAll(ICommandSender sender, Map<String, Supplier<JsonElement>> funcMap) {
-        JsonObject root = new JsonObject();
-        for (Map.Entry<String, Supplier<JsonElement>> e : funcMap.entrySet()) {
-            long start = System.nanoTime();
-            JsonElement el = e.getValue().get();
-            long end = System.nanoTime();
-            sender.sendMessage(
-                    new TextComponentString(String.format("%s" + " ran in %.3fms", e.getKey(), (end - start) / 1e6)));
-            root.add(e.getKey(), el);
-        }
-        this.writeJsonToRoot(root, "recipedump", sender);
-    }
-
     public JsonElement dumpMaterials() {
         JsonObject allMatsObj = new JsonObject();
         for (Material mat : MaterialRegistryManager.getInstance().getRegisteredMaterials()) {
             allMatsObj.add(mat.getUnlocalizedName(), materialToJson(mat));
         }
         return allMatsObj;
-    }
-
-    private JsonElement materialToJson(Material mat) {
-        JsonObject matObj = new JsonObject();
-        matObj.addProperty("resource", mat.getRegistryName());
-        matObj.addProperty("unlocalizedName", mat.getUnlocalizedName());
-        matObj.addProperty("localizedName", mat.getLocalizedName());
-        matObj.addProperty("color", mat.getMaterialRGB());
-        matObj.addProperty("chemicalFormula", mat.getChemicalFormula());
-        matObj.addProperty("id", mat.getId());
-        matObj.addProperty("modId", mat.getModid());
-        matObj.addProperty("mass", mat.getMass());
-        matObj.addProperty("neutrons", mat.getNeutrons());
-        matObj.addProperty("protons", mat.getProtons());
-        matObj.addProperty("isRadioactive", mat.isRadioactive());
-
-        if (fluidStorage.get(mat) != null) {
-            JsonArray matFluids = new JsonArray();
-
-            for (Fluid fluid : fluidStorage.get(mat)) {
-                matFluids.add(fluid.getUnlocalizedName());
-            }
-            matObj.add("fluids", matFluids);
-        }
-        if (itemStorage.get(mat) != null) {
-            JsonArray matItems = new JsonArray();
-            for (ItemStack item : itemStorage.get(mat)) {
-                matItems.add(stackToJson(item));
-            }
-            matObj.add("items", matItems);
-        }
-
-        if (mat.hasProperty(PropertyKey.TOOL)) {
-            JsonObject toolProps = new JsonObject();
-            ToolProperty prop = mat.getProperty(PropertyKey.TOOL);
-            toolProps.addProperty("durability", prop.getToolDurability() * prop.getDurabilityMultiplier());
-            toolProps.addProperty("miningSpeed", prop.getToolSpeed());
-            toolProps.addProperty("attackDamage", prop.getToolAttackDamage());
-            toolProps.addProperty("attackSpeed", prop.getToolAttackSpeed());
-            toolProps.addProperty("harvestLevel", prop.getToolHarvestLevel());
-            matObj.add("tool", toolProps);
-        }
-        if (mat.hasProperty(PropertyKey.ITEM_PIPE)) {
-            JsonObject pipeProps = new JsonObject();
-            ItemPipeProperties prop = mat.getProperty(PropertyKey.ITEM_PIPE);
-            pipeProps.addProperty("transferRate", prop.getTransferRate());
-            pipeProps.addProperty("priority", prop.getPriority());
-            matObj.add("pipe", pipeProps);
-        }
-        if (mat.hasProperty(PropertyKey.FLUID_PIPE)) {
-            JsonObject pipeProps = new JsonObject();
-            FluidPipeProperties prop = mat.getProperty(PropertyKey.FLUID_PIPE);
-            pipeProps.addProperty("channels", prop.getTanks());
-            pipeProps.addProperty("priority", prop.getPriority());
-            pipeProps.addProperty("acidProof", prop.isAcidProof());
-            pipeProps.addProperty("cryoProof", prop.isCryoProof());
-            pipeProps.addProperty("gasProof", prop.isGasProof());
-            pipeProps.addProperty("plasmaProof", prop.isPlasmaProof());
-            pipeProps.addProperty("maxTemperature", prop.getMaxFluidTemperature());
-            pipeProps.addProperty("throughput", prop.getThroughput());
-
-            matObj.add("pipe", pipeProps);
-        }
-        if (mat.hasProperty(PropertyKey.WIRE)) {
-            JsonObject wireProps = new JsonObject();
-            WireProperties prop = mat.getProperty(PropertyKey.WIRE);
-            wireProps.addProperty("amperage", prop.getAmperage());
-            wireProps.addProperty("voltage", prop.getVoltage());
-            wireProps.addProperty("lossPerBlock", prop.getLossPerBlock());
-            wireProps.addProperty("isSuperconductor", prop.isSuperconductor());
-            wireProps.addProperty("curieTemperature", prop.getSuperconductorCriticalTemperature());
-            matObj.add("wire", wireProps);
-        }
-        return matObj;
-    }
-
-    public static @Nullable Material getMaterialFromFluid(@Nullable Fluid fluid) {
-        if (fluid == null) {
-            return null;
-        }
-        Material material = FluidUnifier.getMaterialFromFluid(fluid);
-
-        if (material == null) {
-            // You do have to check FluidRegistry separately.
-            // The wonders of experimental API!
-            if (fluid == FluidRegistry.WATER) {
-                return Materials.Water;
-            } else if (fluid == FluidRegistry.LAVA) {
-                return Materials.Lava;
-            }
-        }
-        return material;
     }
 
     public JsonElement dumpOreDict() {
@@ -342,135 +305,6 @@ public class CommandRecipemapDump extends CommandBase {
             allRecipeMapsObj.add(map.getUnlocalizedName(), recipemapObj);
         }
         return allRecipeMapsObj;
-    }
-
-    private @NotNull JsonObject recipeToJson(Recipe recipe) {
-        JsonObject recipeobj = new JsonObject();
-        // general recipe information
-        recipeobj.addProperty("class", recipe.getClass().toString());
-        recipeobj.addProperty("EUt", recipe.getEUt());
-        recipeobj.addProperty("duration", recipe.getDuration());
-        recipeobj.addProperty("isCTRecipe", recipe.getIsCTRecipe());
-        recipeobj.addProperty("propertyCount", recipe.getPropertyCount());
-        recipeobj.addProperty("unhiddenPropertyCount", recipe.getUnhiddenPropertyCount());
-        JsonArray propertyArray = getPropertiesArray(recipe);
-        recipeobj.add("properties", propertyArray);
-        recipeobj.addProperty("categoryName", recipe.getRecipeCategory().getName());
-        recipeobj.addProperty("categoryTranslationKey", recipe.getRecipeCategory().getTranslationKey());
-        recipeobj.addProperty("categoryUniqueID", recipe.getRecipeCategory().getUniqueID());
-        recipeobj.addProperty("categoryModID", recipe.getRecipeCategory().getModid());
-
-        // items and fluids
-        {
-            JsonArray itemInputs = new JsonArray();
-            if (recipe.getInputs() != null) {
-                for (GTRecipeInput recipeInput : recipe.getInputs()) {
-                    JsonObject input = new JsonObject();
-                    input.addProperty("class", recipeInput.getClass().toString());
-                    input.addProperty("amount", recipeInput.getAmount());
-                    input.addProperty("oreDict", recipeInput.getOreDict());
-                    input.addProperty("sortingOrder", recipeInput.getSortingOrder());
-                    input.addProperty("nonConsumable", recipeInput.isNonConsumable());
-                    JsonArray inputstacks = new JsonArray();
-                    if (recipeInput.getInputStacks() != null) {
-                        for (ItemStack stackInput : recipeInput.getInputStacks()) {
-                            inputstacks.add(this.stackToJson(stackInput));
-                        }
-                    }
-                    input.add("inputStacks", inputstacks);
-                    input.add("inputFluidStack", this.fluidStackToJson(recipeInput.getInputFluidStack()));
-
-                    itemInputs.add(input);
-                }
-            }
-
-            JsonArray fluidInputs = new JsonArray();
-            if (recipe.getFluidInputs() != null) {
-                for (GTRecipeInput recipeInput : recipe.getFluidInputs()) {
-                    JsonObject input = new JsonObject();
-                    input.addProperty("class", recipeInput.getClass().toString());
-                    input.addProperty("amount", recipeInput.getAmount());
-                    input.addProperty("oreDict", recipeInput.getOreDict());
-                    input.addProperty("sortingOrder", recipeInput.getSortingOrder());
-                    input.addProperty("nonConsumable", recipeInput.isNonConsumable());
-                    JsonArray inputstacks = new JsonArray();
-                    if (recipeInput.getInputStacks() != null) {
-                        for (ItemStack stackInput : recipeInput.getInputStacks()) {
-                            inputstacks.add(this.stackToJson(stackInput));
-                        }
-                    }
-                    input.add("inputStacks", inputstacks);
-                    input.add("inputFluidStack", this.fluidStackToJson(recipeInput.getInputFluidStack()));
-
-                    fluidInputs.add(input);
-                }
-            }
-            JsonArray fluidOutputs = new JsonArray();
-            if (recipe.getFluidOutputs() != null) {
-                recipe.getFluidOutputs().forEach(x -> fluidOutputs.add(this.fluidStackToJson(x)));
-            }
-            JsonArray itemOutputs = new JsonArray();
-            if (recipe.getOutputs() != null) {
-                recipe.getOutputs().forEach(x -> itemOutputs.add(this.stackToJson(x)));
-            }
-            if (recipe.getChancedOutputs() != null) {
-                JsonObject chancedOutputObj = new JsonObject();
-                JsonArray chancedOutputs = new JsonArray();
-                var chanced = recipe.getChancedOutputs();
-                chanced.getChancedEntries().forEach(x -> {
-                    var stack = this.stackToJson(x.getIngredient());
-                    stack.addProperty("chance", x.getChance());
-                    chancedOutputs.add(stack);
-                });
-                chancedOutputObj.addProperty("logic",
-                        I18n.translateToLocal(chanced.getChancedOutputLogic().getTranslationKey()));
-                recipeobj.add("chancedOutputs", chancedOutputs);
-            }
-            if (recipe.getChancedFluidOutputs() != null) {
-                JsonObject chancedOutputObj = new JsonObject();
-                JsonArray chancedOutputs = new JsonArray();
-                var chanced = recipe.getChancedFluidOutputs();
-                chanced.getChancedEntries().forEach(x -> {
-                    JsonObject stack = this.fluidStackToJson(x.getIngredient());
-                    stack.addProperty("chance", x.getChance());
-                    chancedOutputs.add(stack);
-                });
-                chancedOutputObj.addProperty("logic",
-                        I18n.translateToLocal(chanced.getChancedOutputLogic().getTranslationKey()));
-                recipeobj.add("chancedFluidOutputs", chancedOutputs);
-            }
-            recipeobj.add("inputsFluid", fluidInputs);
-            recipeobj.add("inputs", itemInputs);
-            recipeobj.add("outputs", itemOutputs);
-            recipeobj.add("fluidOutputs", fluidOutputs);
-        }
-        return recipeobj;
-    }
-
-    private static @NotNull JsonArray getPropertiesArray(Recipe recipe) {
-        JsonArray propertyArray = new JsonArray();
-        for (Entry<RecipeProperty<?>, Object> propEntry : recipe.getPropertyValues()) {
-            JsonObject propdesc = new JsonObject();
-            String key = propEntry.getKey().getKey();
-            propdesc.addProperty("propertyKey", key);
-            if (key.equals(DimensionProperty.KEY)) { // dimension
-                JsonArray arr = new JsonArray();
-                for (int dim : (IntList) propEntry.getValue()) {
-                    arr.add(dim);
-                }
-                propdesc.add("dimensions", arr);
-            } else if (key.equals(CleanroomProperty.KEY)) { // cleanroom
-                propdesc.addProperty("cleanroom", ((CleanroomType) propEntry.getValue()).getName());
-            } else if (key.equals(TemperatureProperty.KEY)) { // temperature
-                propdesc.addProperty("temperature", (int) propEntry.getValue());
-            } else if (key.equals(MixerSettlerCellsProperty.KEY)) { // mixer_settler_cells
-                propdesc.addProperty("cells", (int) propEntry.getValue());
-            } else if (key.equals(FusionEUToStartProperty.KEY)) { // eu_to_start
-                propdesc.addProperty("eu_to_start", (long) propEntry.getValue());
-            }
-            propertyArray.add(propdesc);
-        }
-        return propertyArray;
     }
 
     public JsonObject stackToJson(ItemStack stack) {
@@ -642,6 +476,320 @@ public class CommandRecipemapDump extends CommandBase {
         }
 
         return root;
+    }
+
+    private void runAll(ICommandSender sender, Map<String, Supplier<JsonElement>> funcMap) {
+        JsonObject root = new JsonObject();
+        for (Map.Entry<String, Supplier<JsonElement>> e : funcMap.entrySet()) {
+            long start = System.nanoTime();
+            JsonElement el = e.getValue().get();
+            long end = System.nanoTime();
+            sender.sendMessage(
+                    new TextComponentString(
+                            String.format("%s" + " ran in %.3fms", e.getKey(), (end - start) / 1e6)));
+            root.add(e.getKey(), el);
+        }
+        this.writeJsonToRoot(root, "recipedump", sender);
+    }
+
+    private JsonElement dumpMultis() {
+        var root = new JsonObject();
+        for (MetaTileEntity mte : GregTechAPI.MTE_REGISTRY) {
+            if (!(mte instanceof MultiblockControllerBase multiblock)) continue;
+
+            var multiObj = new JsonObject();
+            multiObj.addProperty("class", mte.getClass().getName());
+            multiObj.addProperty("metaName", mte.getMetaName());
+
+            var pattern = multiblock.structurePattern;
+            if (pattern == null) continue;
+            TraceabilityPredicate[][][] predicates;
+            try {
+                predicates = (TraceabilityPredicate[][][]) BLOCK_MATCHES.get(pattern);
+            } catch (IllegalAccessException e) {
+                throw new RuntimeException(e);
+            }
+
+            var predicateToChar = new HashMap<TraceabilityPredicate, Character>();
+            var charToPredicate = new HashMap<Character, TraceabilityPredicate>();
+            for (int z = 0; z < predicates.length; z++) {
+                for (int y = 0; y < predicates[z].length; y++) {
+                    for (int x = 0; x < predicates[z][y].length; x++) {
+                        var predicate = predicates[z][y][x];
+                        if (predicateToChar.containsKey(predicate)) continue;
+                        char c = (char) ('A' + predicateToChar.size());
+                        predicateToChar.put(predicate, c);
+                        charToPredicate.put(c, predicate);
+                    }
+                }
+            }
+
+            var aisles = new JsonArray();
+            for (int z = 0; z < predicates.length; z++) {
+                var aisle = new JsonArray();
+                for (int y = 0; y < predicates[z].length; y++) {
+                    var sb = new StringBuilder();
+                    for (int x = 0; x < predicates[z][y].length; x++) {
+                        sb.append(predicateToChar.get(predicates[z][y][x]));
+                    }
+                    aisle.add(sb.toString());
+                }
+                aisles.add(aisle);
+            }
+            multiObj.add("aisles", aisles);
+
+            var reps = new JsonArray();
+            for (int[] rep : pattern.aisleRepetitions) {
+                var pair = new JsonArray();
+                pair.add(rep[0]);
+                pair.add(rep[1]);
+                reps.add(pair);
+            }
+            multiObj.add("aisleRepetitions", reps);
+
+            var symbols = new JsonObject();
+            for (var entry : charToPredicate.entrySet()) {
+                char c = entry.getKey();
+                var predicate = entry.getValue();
+                var symObj = new JsonObject();
+                try {
+                    symObj.addProperty("isCenter", IS_CENTER.getBoolean(predicate));
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+                symObj.addProperty("hasAir", predicate.isHasAir());
+                symObj.addProperty("isSingle", predicate.isSingle());
+                symObj.add("common", simplePredicatesToJson(predicate.common));
+                symObj.add("limited", simplePredicatesToJson(predicate.limited));
+                symbols.add(String.valueOf(c), symObj);
+            }
+            multiObj.add("symbols", symbols);
+
+            root.add(mte.metaTileEntityId.toString(), multiObj);
+        }
+        return root;
+    }
+
+    private JsonArray simplePredicatesToJson(List<TraceabilityPredicate.SimplePredicate> list) {
+        var arr = new JsonArray();
+        for (var sp : list) {
+            var obj = new JsonObject();
+            if (sp.minGlobalCount != -1) obj.addProperty("minGlobal", sp.minGlobalCount);
+            if (sp.maxGlobalCount != -1) obj.addProperty("maxGlobal", sp.maxGlobalCount);
+            if (sp.minLayerCount != -1) obj.addProperty("minLayer", sp.minLayerCount);
+            if (sp.maxLayerCount != -1) obj.addProperty("maxLayer", sp.maxLayerCount);
+            if (sp.previewCount != -1) obj.addProperty("preview", sp.previewCount);
+
+            var candArr = new JsonArray();
+            if (sp.candidates != null) {
+                for (var info : sp.candidates.get()) {
+                    var candObj = new JsonObject();
+                    var state = info.getBlockState();
+                    var block = state.getBlock();
+                    var regName = block.getRegistryName();
+                    if (regName != null) {
+                        candObj.addProperty("block", regName.toString());
+                        candObj.addProperty("meta", block.damageDropped(state));
+                    }
+                    if (info.getTileEntity() instanceof IGregTechTileEntity gtTe) {
+                        var stack = gtTe.getMetaTileEntity().getStackForm();
+                        var itemReg = stack.getItem().getRegistryName();
+                        if (itemReg != null) {
+                            candObj.addProperty("item", itemReg.toString());
+                            candObj.addProperty("itemMeta", stack.getItemDamage());
+                        }
+                    }
+                    candArr.add(candObj);
+                }
+            }
+            obj.add("candidates", candArr);
+            arr.add(obj);
+        }
+        return arr;
+    }
+
+    private JsonElement materialToJson(Material mat) {
+        JsonObject matObj = new JsonObject();
+        matObj.addProperty("resource", mat.getRegistryName());
+        matObj.addProperty("unlocalizedName", mat.getUnlocalizedName());
+        matObj.addProperty("localizedName", mat.getLocalizedName());
+        matObj.addProperty("color", mat.getMaterialRGB());
+        matObj.addProperty("chemicalFormula", mat.getChemicalFormula());
+        matObj.addProperty("id", mat.getId());
+        matObj.addProperty("modId", mat.getModid());
+        matObj.addProperty("mass", mat.getMass());
+        matObj.addProperty("neutrons", mat.getNeutrons());
+        matObj.addProperty("protons", mat.getProtons());
+        matObj.addProperty("isRadioactive", mat.isRadioactive());
+
+        if (fluidStorage.get(mat) != null) {
+            JsonArray matFluids = new JsonArray();
+
+            for (Fluid fluid : fluidStorage.get(mat)) {
+                matFluids.add(fluid.getUnlocalizedName());
+            }
+            matObj.add("fluids", matFluids);
+        }
+        if (itemStorage.get(mat) != null) {
+            JsonArray matItems = new JsonArray();
+            for (ItemStack item : itemStorage.get(mat)) {
+                matItems.add(stackToJson(item));
+            }
+            matObj.add("items", matItems);
+        }
+
+        if (mat.hasProperty(PropertyKey.TOOL)) {
+            JsonObject toolProps = new JsonObject();
+            ToolProperty prop = mat.getProperty(PropertyKey.TOOL);
+            toolProps.addProperty(
+                    "durability", prop.getToolDurability() * prop.getDurabilityMultiplier());
+            toolProps.addProperty("miningSpeed", prop.getToolSpeed());
+            toolProps.addProperty("attackDamage", prop.getToolAttackDamage());
+            toolProps.addProperty("attackSpeed", prop.getToolAttackSpeed());
+            toolProps.addProperty("harvestLevel", prop.getToolHarvestLevel());
+            matObj.add("tool", toolProps);
+        }
+        if (mat.hasProperty(PropertyKey.ITEM_PIPE)) {
+            JsonObject pipeProps = new JsonObject();
+            ItemPipeProperties prop = mat.getProperty(PropertyKey.ITEM_PIPE);
+            pipeProps.addProperty("transferRate", prop.getTransferRate());
+            pipeProps.addProperty("priority", prop.getPriority());
+            matObj.add("pipe", pipeProps);
+        }
+        if (mat.hasProperty(PropertyKey.FLUID_PIPE)) {
+            JsonObject pipeProps = new JsonObject();
+            FluidPipeProperties prop = mat.getProperty(PropertyKey.FLUID_PIPE);
+            pipeProps.addProperty("channels", prop.getTanks());
+            pipeProps.addProperty("priority", prop.getPriority());
+            pipeProps.addProperty("acidProof", prop.isAcidProof());
+            pipeProps.addProperty("cryoProof", prop.isCryoProof());
+            pipeProps.addProperty("gasProof", prop.isGasProof());
+            pipeProps.addProperty("plasmaProof", prop.isPlasmaProof());
+            pipeProps.addProperty("maxTemperature", prop.getMaxFluidTemperature());
+            pipeProps.addProperty("throughput", prop.getThroughput());
+
+            matObj.add("pipe", pipeProps);
+        }
+        if (mat.hasProperty(PropertyKey.WIRE)) {
+            JsonObject wireProps = new JsonObject();
+            WireProperties prop = mat.getProperty(PropertyKey.WIRE);
+            wireProps.addProperty("amperage", prop.getAmperage());
+            wireProps.addProperty("voltage", prop.getVoltage());
+            wireProps.addProperty("lossPerBlock", prop.getLossPerBlock());
+            wireProps.addProperty("isSuperconductor", prop.isSuperconductor());
+            wireProps.addProperty("curieTemperature", prop.getSuperconductorCriticalTemperature());
+            matObj.add("wire", wireProps);
+        }
+        return matObj;
+    }
+
+    private @NotNull JsonObject recipeToJson(Recipe recipe) {
+        JsonObject recipeobj = new JsonObject();
+        // general recipe information
+        recipeobj.addProperty("class", recipe.getClass().toString());
+        recipeobj.addProperty("EUt", recipe.getEUt());
+        recipeobj.addProperty("duration", recipe.getDuration());
+        recipeobj.addProperty("isCTRecipe", recipe.getIsCTRecipe());
+        recipeobj.addProperty("propertyCount", recipe.getPropertyCount());
+        recipeobj.addProperty("unhiddenPropertyCount", recipe.getUnhiddenPropertyCount());
+        JsonArray propertyArray = getPropertiesArray(recipe);
+        recipeobj.add("properties", propertyArray);
+        recipeobj.addProperty("categoryName", recipe.getRecipeCategory().getName());
+        recipeobj.addProperty("categoryTranslationKey", recipe.getRecipeCategory().getTranslationKey());
+        recipeobj.addProperty("categoryUniqueID", recipe.getRecipeCategory().getUniqueID());
+        recipeobj.addProperty("categoryModID", recipe.getRecipeCategory().getModid());
+
+        // items and fluids
+        {
+            JsonArray itemInputs = new JsonArray();
+            if (recipe.getInputs() != null) {
+                for (GTRecipeInput recipeInput : recipe.getInputs()) {
+                    JsonObject input = new JsonObject();
+                    input.addProperty("class", recipeInput.getClass().toString());
+                    input.addProperty("amount", recipeInput.getAmount());
+                    input.addProperty("oreDict", recipeInput.getOreDict());
+                    input.addProperty("sortingOrder", recipeInput.getSortingOrder());
+                    input.addProperty("nonConsumable", recipeInput.isNonConsumable());
+                    JsonArray inputstacks = new JsonArray();
+                    if (recipeInput.getInputStacks() != null) {
+                        for (ItemStack stackInput : recipeInput.getInputStacks()) {
+                            inputstacks.add(this.stackToJson(stackInput));
+                        }
+                    }
+                    input.add("inputStacks", inputstacks);
+                    input.add("inputFluidStack", this.fluidStackToJson(recipeInput.getInputFluidStack()));
+
+                    itemInputs.add(input);
+                }
+            }
+
+            JsonArray fluidInputs = new JsonArray();
+            if (recipe.getFluidInputs() != null) {
+                for (GTRecipeInput recipeInput : recipe.getFluidInputs()) {
+                    JsonObject input = new JsonObject();
+                    input.addProperty("class", recipeInput.getClass().toString());
+                    input.addProperty("amount", recipeInput.getAmount());
+                    input.addProperty("oreDict", recipeInput.getOreDict());
+                    input.addProperty("sortingOrder", recipeInput.getSortingOrder());
+                    input.addProperty("nonConsumable", recipeInput.isNonConsumable());
+                    JsonArray inputstacks = new JsonArray();
+                    if (recipeInput.getInputStacks() != null) {
+                        for (ItemStack stackInput : recipeInput.getInputStacks()) {
+                            inputstacks.add(this.stackToJson(stackInput));
+                        }
+                    }
+                    input.add("inputStacks", inputstacks);
+                    input.add("inputFluidStack", this.fluidStackToJson(recipeInput.getInputFluidStack()));
+
+                    fluidInputs.add(input);
+                }
+            }
+            JsonArray fluidOutputs = new JsonArray();
+            if (recipe.getFluidOutputs() != null) {
+                recipe.getFluidOutputs().forEach(x -> fluidOutputs.add(this.fluidStackToJson(x)));
+            }
+            JsonArray itemOutputs = new JsonArray();
+            if (recipe.getOutputs() != null) {
+                recipe.getOutputs().forEach(x -> itemOutputs.add(this.stackToJson(x)));
+            }
+            if (recipe.getChancedOutputs() != null) {
+                JsonObject chancedOutputObj = new JsonObject();
+                JsonArray chancedOutputs = new JsonArray();
+                var chanced = recipe.getChancedOutputs();
+                chanced
+                        .getChancedEntries()
+                        .forEach(
+                                x -> {
+                                    var stack = this.stackToJson(x.getIngredient());
+                                    stack.addProperty("chance", x.getChance());
+                                    chancedOutputs.add(stack);
+                                });
+                chancedOutputObj.addProperty(
+                        "logic", I18n.translateToLocal(chanced.getChancedOutputLogic().getTranslationKey()));
+                recipeobj.add("chancedOutputs", chancedOutputs);
+            }
+            if (recipe.getChancedFluidOutputs() != null) {
+                JsonObject chancedOutputObj = new JsonObject();
+                JsonArray chancedOutputs = new JsonArray();
+                var chanced = recipe.getChancedFluidOutputs();
+                chanced
+                        .getChancedEntries()
+                        .forEach(
+                                x -> {
+                                    JsonObject stack = this.fluidStackToJson(x.getIngredient());
+                                    stack.addProperty("chance", x.getChance());
+                                    chancedOutputs.add(stack);
+                                });
+                chancedOutputObj.addProperty(
+                        "logic", I18n.translateToLocal(chanced.getChancedOutputLogic().getTranslationKey()));
+                recipeobj.add("chancedFluidOutputs", chancedOutputs);
+            }
+            recipeobj.add("inputsFluid", fluidInputs);
+            recipeobj.add("inputs", itemInputs);
+            recipeobj.add("outputs", itemOutputs);
+            recipeobj.add("fluidOutputs", fluidOutputs);
+        }
+        return recipeobj;
     }
 
     private JsonElement shapedToJson(IShapedRecipe shaped) {
