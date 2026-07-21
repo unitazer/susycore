@@ -15,6 +15,7 @@ import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.crafting.FurnaceRecipes;
+import net.minecraft.item.crafting.IRecipe;
 import net.minecraft.item.crafting.Ingredient;
 import net.minecraft.item.crafting.ShapelessRecipes;
 import net.minecraft.nbt.*;
@@ -475,9 +476,8 @@ public class CommandRecipemapDump extends CommandBase {
                 recipeobj.addProperty("type", "shapelessOre");
                 recipeobj.add("recipe", this.shapelessOreToJson(oreRecipe));
             } else {
-                recipeobj.addProperty("type", "unknown");
-                SusyLog.logger.warn("unknown type of {}", cr.getClass().getName());
-                recipeobj.add("recipe", JsonNull.INSTANCE);
+                recipeobj.addProperty("type", "generic");
+                recipeobj.add("recipe", this.genericToJson(cr));
             }
             recipeobj.add("output", stackToJson(cr.getRecipeOutput()));
             root.add(recipeobj);
@@ -1158,6 +1158,21 @@ public class CommandRecipemapDump extends CommandBase {
             ingredients.add(ingredientToJson(ingredient));
         }
         root.add("ingredients", ingredients);
+        return root;
+    }
+
+    private JsonElement genericToJson(IRecipe recipe) {
+        JsonObject root = new JsonObject();
+        var ingredients = recipe.getIngredients();
+        if (ingredients != null) {
+            JsonArray ings = new JsonArray();
+            for (var ing : ingredients) {
+                if (ing != null && ing.getMatchingStacks() != null && ing.getMatchingStacks().length != 0) {
+                    ings.add(ingredientToJson(ing));
+                }
+            }
+            root.add("ingredients", ings);
+        }
         return root;
     }
 }
