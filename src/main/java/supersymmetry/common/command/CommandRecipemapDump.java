@@ -878,27 +878,8 @@ public class CommandRecipemapDump extends CommandBase {
 
             var candArr = new JsonArray();
             if (sp.candidates != null) {
-                var infos = sp.candidates.get();
-                if (infos != null) {
-                    for (var info : infos) {
-                        var candObj = new JsonObject();
-                        var state = info.getBlockState();
-                        var block = state.getBlock();
-                        var regName = block.getRegistryName();
-                        if (regName != null) {
-                            candObj.addProperty("block", regName.toString());
-                            candObj.addProperty("meta", block.damageDropped(state));
-                        }
-                        if (info.getTileEntity() instanceof IGregTechTileEntity gtTe) {
-                            var stack = gtTe.getMetaTileEntity().getStackForm();
-                            var itemReg = stack.getItem().getRegistryName();
-                            if (itemReg != null) {
-                                candObj.addProperty("item", itemReg.toString());
-                                candObj.addProperty("itemMeta", stack.getItemDamage());
-                            }
-                        }
-                        candArr.add(candObj);
-                    }
+                for (var stack : sp.getCandidates()) {
+                    candArr.add(stackToJson(stack));
                 }
             }
             obj.add("candidates", candArr);
