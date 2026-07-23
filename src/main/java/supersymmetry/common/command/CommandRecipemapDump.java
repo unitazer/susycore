@@ -24,6 +24,7 @@ import net.minecraft.util.NonNullList;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.text.TextComponentString;
 import net.minecraft.util.text.translation.I18n;
+import net.minecraft.world.biome.Biome;
 import net.minecraftforge.common.crafting.IShapedRecipe;
 import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidRegistry;
@@ -55,9 +56,17 @@ import gregtech.api.recipes.Recipe;
 import gregtech.api.recipes.RecipeMap;
 import gregtech.api.recipes.ingredients.GTRecipeInput;
 import gregtech.api.recipes.recipeproperties.CleanroomProperty;
+import gregtech.api.recipes.recipeproperties.ComputationProperty;
 import gregtech.api.recipes.recipeproperties.FusionEUToStartProperty;
+import gregtech.api.recipes.recipeproperties.GasCollectorDimensionProperty;
+import gregtech.api.recipes.recipeproperties.ImplosionExplosiveProperty;
+import gregtech.api.recipes.recipeproperties.PrimitiveProperty;
 import gregtech.api.recipes.recipeproperties.RecipeProperty;
+import gregtech.api.recipes.recipeproperties.ResearchProperty;
+import gregtech.api.recipes.recipeproperties.ResearchPropertyData;
+import gregtech.api.recipes.recipeproperties.ScanProperty;
 import gregtech.api.recipes.recipeproperties.TemperatureProperty;
+import gregtech.api.recipes.recipeproperties.TotalComputationProperty;
 import gregtech.api.unification.FluidUnifier;
 import gregtech.api.unification.OreDictUnifier;
 import gregtech.api.unification.material.Material;
@@ -74,8 +83,8 @@ import gregtech.common.pipelike.itempipe.ItemPipeType;
 import gregtech.core.unification.material.internal.MaterialRegistryManager;
 import it.unimi.dsi.fastutil.ints.IntList;
 import supersymmetry.api.SusyLog;
-import supersymmetry.api.recipes.properties.DimensionProperty;
-import supersymmetry.api.recipes.properties.MixerSettlerCellsProperty;
+import supersymmetry.api.particle.ParticleBeam;
+import supersymmetry.api.recipes.properties.*;
 
 public class CommandRecipemapDump extends CommandBase {
 
@@ -175,20 +184,89 @@ public class CommandRecipemapDump extends CommandBase {
             JsonObject propdesc = new JsonObject();
             String key = propEntry.getKey().getKey();
             propdesc.addProperty("propertyKey", key);
-            if (key.equals(DimensionProperty.KEY)) { // dimension
+            if (key.equals(DimensionProperty.KEY) || key.equals(GasCollectorDimensionProperty.KEY)) {
                 JsonArray arr = new JsonArray();
                 for (int dim : (IntList) propEntry.getValue()) {
                     arr.add(dim);
                 }
                 propdesc.add("dimensions", arr);
-            } else if (key.equals(CleanroomProperty.KEY)) { // cleanroom
+            } else if (key.equals(CleanroomProperty.KEY)) {
                 propdesc.addProperty("cleanroom", ((CleanroomType) propEntry.getValue()).getName());
-            } else if (key.equals(TemperatureProperty.KEY)) { // temperature
+            } else if (key.equals(TemperatureProperty.KEY)) {
                 propdesc.addProperty("temperature", (int) propEntry.getValue());
-            } else if (key.equals(MixerSettlerCellsProperty.KEY)) { // mixer_settler_cells
+            } else if (key.equals(MixerSettlerCellsProperty.KEY)) {
                 propdesc.addProperty("cells", (int) propEntry.getValue());
-            } else if (key.equals(FusionEUToStartProperty.KEY)) { // eu_to_start
-                propdesc.addProperty("eu_to_start", (long) propEntry.getValue());
+            } else if (key.equals(FusionEUToStartProperty.KEY)) {
+                propdesc.addProperty("euToStart", (long) propEntry.getValue());
+            } else if (key.equals(ComputationProperty.KEY)) {
+                propdesc.addProperty("computationPerTick", (int) propEntry.getValue());
+            } else if (key.equals(CryogenicEnvironmentProperty.KEY)) {
+                propdesc.addProperty("cryogenicEnvironment", (boolean) propEntry.getValue());
+            } else if (key.equals(EvaporationEnergyProperty.KEY)) {
+                propdesc.addProperty("evaporationEnergy", (int) propEntry.getValue());
+            } else if (key.equals(PrimitiveProperty.KEY)) {
+                propdesc.addProperty("primitiveProperty", true);
+            } else if (key.equals(ResearchProperty.KEY)) {
+                ResearchPropertyData data = (ResearchPropertyData) propEntry.getValue();
+                JsonArray entries = new JsonArray();
+                for (ResearchPropertyData.ResearchEntry entry : data) {
+                    JsonObject entryObj = new JsonObject();
+                    entryObj.addProperty("researchId", entry.getResearchId());
+                    ItemStack stack = entry.getDataItem();
+                    JsonObject stackObj = new JsonObject();
+                    stackObj.addProperty("resource", stack.getItem().getRegistryName().toString());
+                    stackObj.addProperty("count", stack.getCount());
+                    stackObj.addProperty("metadata", stack.getMetadata());
+                    entryObj.add("dataItem", stackObj);
+                    entries.add(entryObj);
+                }
+                propdesc.add("researchEntries", entries);
+            } else if (key.equals(ScanProperty.KEY)) {
+                propdesc.addProperty("scan", (boolean) propEntry.getValue());
+            } else if (key.equals(TotalComputationProperty.KEY)) {
+                propdesc.addProperty("totalComputation", (int) propEntry.getValue());
+            } else if (key.equals(ImplosionExplosiveProperty.KEY)) {
+                ItemStack stack = (ItemStack) propEntry.getValue();
+                JsonObject stackObj = new JsonObject();
+                stackObj.addProperty("resource", stack.getItem().getRegistryName().toString());
+                stackObj.addProperty("count", stack.getCount());
+                stackObj.addProperty("metadata", stack.getMetadata());
+                propdesc.add("explosive", stackObj);
+            } else if (key.equals(BiomeProperty.KEY)) {
+                BiomeProperty.BiomePropertyList list = (BiomeProperty.BiomePropertyList) propEntry.getValue();
+                JsonArray white = new JsonArray();
+                for (Biome b : list.whiteListBiomes) white.add(b.biomeName);
+                JsonArray black = new JsonArray();
+                for (Biome b : list.blackListBiomes) black.add(b.biomeName);
+                propdesc.add("whiteListBiomes", white);
+                propdesc.add("blackListBiomes", black);
+            } else if (key.equals(CatalystProperty.KEY)) {
+                CatalystPropertyValue val = (CatalystPropertyValue) propEntry.getValue();
+                propdesc.addProperty("tier", val.getTier());
+                propdesc.addProperty("catalystGroup", val.getCatalystGroup().getName());
+            } else if (key.equals(CoilingCoilTemperatureProperty.KEY)) {
+                propdesc.addProperty("coolingTemperature", (int) propEntry.getValue());
+            } else if (key.equals(ParticleBeamProperty.KEY)) {
+                ParticleBeam beam = (ParticleBeam) propEntry.getValue();
+                JsonObject beamObj = new JsonObject();
+                if (beam.getParticle() != null) {
+                    beamObj.addProperty("particle", beam.getParticle().getName());
+                } else {
+                    beamObj.add("particle", JsonNull.INSTANCE);
+                }
+                beamObj.addProperty("energy", beam.getEnergy());
+                beamObj.addProperty("bunchSpacing", beam.getBunchSpacing());
+                beamObj.addProperty("bunchLength", beam.getBunchLength());
+                beamObj.addProperty("nBunches", beam.getNBunches());
+                beamObj.addProperty("nParticlesPerBunch", beam.getNParticlesPerBunch());
+                beamObj.addProperty("emittance", beam.getEmittance());
+                beamObj.addProperty("beamSize", beam.getBeamSize());
+                propdesc.add("particleBeam", beamObj);
+            } else if (key.equals(PseudoMultiProperty.KEY)) {
+                PseudoMultiPropertyValues val = (PseudoMultiPropertyValues) propEntry.getValue();
+                propdesc.addProperty("blockGroupName", val.getBlockGroupName());
+            } else if (key.equals(SinterProperty.KEY)) {
+                propdesc.addProperty("plasmaEnabled", (boolean) propEntry.getValue());
             }
             propertyArray.add(propdesc);
         }
@@ -362,6 +440,8 @@ public class CommandRecipemapDump extends CommandBase {
         stackObj.addProperty("resource", stack.getItem().getRegistryName().toString());
         stackObj.addProperty("count", stack.getCount());
         stackObj.addProperty("metadata", stack.getMetadata());
+        stackObj.addProperty("displayName", stack.getDisplayName());
+        stackObj.addProperty("translationKey", stack.getTranslationKey());
         if (stack.getTagCompound() != null) {
             stackObj.add("nbt", CommandRecipemapDump.nbtToJson(stack.getTagCompound()));
         }
