@@ -39,6 +39,7 @@ import org.jetbrains.annotations.Nullable;
 
 import com.google.gson.*;
 
+import dev.tianmi.sussypatches.api.recipe.property.InfoProperty;
 import gregtech.api.GTValues;
 import gregtech.api.GregTechAPI;
 import gregtech.api.metatileentity.ITieredMetaTileEntity;
@@ -81,6 +82,8 @@ import gregtech.common.pipelike.cable.Insulation;
 import gregtech.common.pipelike.fluidpipe.FluidPipeType;
 import gregtech.common.pipelike.itempipe.ItemPipeType;
 import gregtech.core.unification.material.internal.MaterialRegistryManager;
+import gregtechfoodoption.recipe.properties.CauseDamageProperty;
+import gregtechfoodoption.recipe.properties.MobOnTopProperty;
 import it.unimi.dsi.fastutil.ints.IntList;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.particle.ParticleBeam;
@@ -267,6 +270,22 @@ public class CommandRecipemapDump extends CommandBase {
                 propdesc.addProperty("blockGroupName", val.getBlockGroupName());
             } else if (key.equals(SinterProperty.KEY)) {
                 propdesc.addProperty("plasmaEnabled", (boolean) propEntry.getValue());
+            } else if (key.equals(InfoProperty.KEY)) {
+                InfoProperty.TranslationData data = (InfoProperty.TranslationData) propEntry.getValue();
+                propdesc.addProperty("translationKey", data.translationKey());
+                JsonArray args = new JsonArray();
+                for (Object arg : data.args()) {
+                    if (arg != null) {
+                        args.add(arg.toString());
+                    } else {
+                        args.add(JsonNull.INSTANCE);
+                    }
+                }
+                propdesc.add("args", args);
+            } else if (key.equals(MobOnTopProperty.KEY)) {
+                propdesc.addProperty("mobOnTop", ((ResourceLocation) propEntry.getValue()).toString());
+            } else if (key.equals(CauseDamageProperty.KEY)) {
+                propdesc.addProperty("causeDamage", (float) propEntry.getValue());
             }
             propertyArray.add(propdesc);
         }
