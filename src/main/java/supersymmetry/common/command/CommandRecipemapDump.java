@@ -968,6 +968,8 @@ public class CommandRecipemapDump extends CommandBase {
     private JsonArray simplePredicatesToJson(List<TraceabilityPredicate.SimplePredicate> list) {
         var arr = new JsonArray();
         for (var sp : list) {
+            if (sp.candidates == null) continue;
+
             var obj = new JsonObject();
             if (sp.minGlobalCount != -1) obj.addProperty("minGlobal", sp.minGlobalCount);
             if (sp.maxGlobalCount != -1) obj.addProperty("maxGlobal", sp.maxGlobalCount);
@@ -976,10 +978,8 @@ public class CommandRecipemapDump extends CommandBase {
             if (sp.previewCount != -1) obj.addProperty("preview", sp.previewCount);
 
             var candArr = new JsonArray();
-            if (sp.candidates != null) {
-                for (var stack : sp.getCandidates()) {
-                    candArr.add(stackToJson(stack));
-                }
+            for (var stack : sp.getCandidates()) {
+                candArr.add(stackToJson(stack));
             }
             obj.add("candidates", candArr);
             arr.add(obj);
