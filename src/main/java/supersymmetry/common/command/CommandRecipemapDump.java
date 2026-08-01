@@ -535,12 +535,18 @@ public class CommandRecipemapDump extends CommandBase {
         return stackObj;
     }
 
+    private static boolean isNotConsumed(ItemStack stack) {
+        return !stack.isEmpty() && stack.getItem().hasContainerItem(stack);
+    }
+
     public JsonObject ingredientToJson(Ingredient ingredient) {
         JsonObject ingredientObj = new JsonObject();
 
         JsonArray possibleInputs = new JsonArray();
         for (var v : ingredient.getMatchingStacks()) {
-            possibleInputs.add(this.stackToJson(v));
+            JsonObject stackObj = this.stackToJson(v);
+            stackObj.addProperty("notConsumed", isNotConsumed(v));
+            possibleInputs.add(stackObj);
         }
         ingredientObj.addProperty("class", ingredient.getClass().getName());
         ingredientObj.add("validInputs", possibleInputs);
