@@ -9,17 +9,19 @@ use rapier3d::math::Vec3;
 use rapier3d::parry::query::{DefaultQueryDispatcher, QueryDispatcher};
 use rapier3d::prelude::*;
 
-use crate::chunklet::{Chunklet, TerrainData};
+use crate::chunklet::Chunklet;
 use crate::dispatcher::ChunkletDispatcher;
+use crate::terrain::TerrainData;
 use crate::{IHateJava, JResult};
 
 use rapier3d::na::{Isometry3, Quaternion, Translation3, UnitQuaternion};
 //dimension specific information, root structure for the physics simulation
 pub struct Scene {
-    pub world:PhysicsWorld,
+  pub world: PhysicsWorld,
   pub terrain: TerrainData,
   pub gravity: Vec3,
 }
+//TODO maybe there is a less stupid way of storing these?
 static SCENES: LazyLock<Mutex<Vec<Scene>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 impl Scene {
   pub fn with_scenes<F, R>(f: F) -> R
@@ -57,9 +59,7 @@ impl Scene {
       log::error!("empty chunklet supplied, shouldve been filtered out");
       return;
     }
-    self
-      .terrain
-      .put(x, y, z, c, &mut self.world.colliders);
+    self.terrain.put(x, y, z, c, &mut self.world.colliders);
   }
 
   pub fn initialize_scene(dim: usize, gravity: Vec3) {
@@ -169,7 +169,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addEntity(
   debug_assert!(world_id >= 0);
   assert!(shape_type >= 0 && shape_type <= ShapeType::Custom as i32);
   //TODO dont do this
-  let shape_type: ShapeType = unsafe { mem::transmute(shape_type as u8) }; 
+  let shape_type: ShapeType = unsafe { mem::transmute(shape_type as u8) };
 
   let data = env
     .with_env(|env| -> Result<Vec<f32>, jni::errors::Error> {
@@ -229,7 +229,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addForceDebug(
   fz: jdouble,
 ) {
   let handle: ColliderHandle = handle.collider_handle();
-Scene::with_scene_mut(world_id as usize, |x| {
+  Scene::with_scene_mut(world_id as usize, |x| {
     let collider = x.world.colliders.get(handle);
     if let Some(collider) = collider
       && let Some(parent) = collider.parent()

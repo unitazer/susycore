@@ -5,6 +5,7 @@ pub mod logger;
 pub mod octree;
 pub mod rendering;
 pub mod scene;
+pub mod terrain;
 
 use std::env;
 use std::time::Instant;

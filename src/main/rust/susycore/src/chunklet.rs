@@ -4,190 +4,16 @@ use rapier3d::parry::bounding_volume::{Aabb, BoundingSphere};
 use rapier3d::parry::query::{PointProjection, Ray, RayIntersection};
 use rapier3d::parry::shape::Cuboid;
 use rapier3d::prelude::{
-  ColliderBuilder, ColliderHandle, ColliderSet, FeatureId, IslandManager, MassProperties,
-  PointQuery, RayCast, RigidBodySet, Shape, ShapeType, SharedShape, TypedShape,
+  FeatureId, MassProperties, PointQuery, RayCast, Shape, ShapeType, TypedShape,
 };
-use std::collections::HashMap;
 use std::mem::size_of;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
 use crate::Real;
 use crate::block_collisions::{BlockColliderInfoHandle, COLLIDERS};
 use crate::octree::Octree;
+use crate::terrain::{CHUNK_SIDE, CHUNK_SIDE_LOG2, CHUNK_VOLUME};
 
-//the minecraft world is (6*10^7)^2 * 256 blocks which is ~60^2 so it can be packed
-#[derive(Hash, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
-pub struct PackedChunkletCoords(u64);
-impl PackedChunkletCoords {
-  //chunk space
-  #[inline(always)]
-  pub fn from_xyz(x: i32, y: u8, z: i32) -> Self {
-    debug_assert!(x.abs() < (3_000_000 >> 4));
-    debug_assert!(z.abs() < (3_000_000 >> 4));
-    let packed = ((x < 0) as u64) << 63
-      | ((z < 0) as u64) << 62
-      | (x.unsigned_abs() as u64) << 38
-      | (z.unsigned_abs() as u64) << 13
-      | y as u64;
-    Self(packed)
-  }
-  pub fn to_xyz(p: u64) -> (i32, u8, i32) {
-    let y = p as u8;
-    let x = if (p >> 63) & 1 != 0 {
-      -((p >> 38 & 0xFFFFFF) as i32)
-    } else {
-      (p >> 38 & 0xFFFFFF) as i32
-    };
-    let z = if (p >> 62) & 1 != 0 {
-      -((p >> 13 & 0x1FFFFFF) as i32)
-    } else {
-      (p >> 13 & 0x1FFFFFF) as i32
-    };
-    (x, y, z)
-  }
-  pub fn inner(self) -> u64 {
-    self.0
-  }
-}
-pub const CHUNK_SIDE: usize = 16;
-pub const CHUNK_SIDE_LOG2: usize = CHUNK_SIDE.ilog2() as usize;
-pub const CHUNK_VOLUME: usize = CHUNK_SIDE.pow(3);
-
-pub struct TerrainData {
-  pub chunklets: HashMap<PackedChunkletCoords, Arc<Chunklet>>,
-  pub colliders: HashMap<PackedChunkletCoords, ColliderHandle>,
-}
-
-impl Default for TerrainData {
-  fn default() -> Self {
-    Self::new()
-  }
-}
-
-impl TerrainData {
-  pub fn new() -> Self {
-    Self {
-      chunklets: HashMap::new(),
-      colliders: HashMap::new(),
-    }
-  }
-
-  pub fn get(&self, x: i32, y: u8, z: i32) -> Option<&Arc<Chunklet>> {
-    self.chunklets.get(&PackedChunkletCoords::from_xyz(x, y, z))
-  }
-
-  //a very unsafe function btw
-  fn handle_to_blockhandle(h: BlockColliderInfoHandle) -> Option<NonZeroU32> {
-    NonZeroU32::new(h.0)
-  }
-
-  pub fn update(
-    &mut self,
-    cx: i32,
-    cy: u8,
-    cz: i32,
-    x: u8,
-    y: u8,
-    z: u8,
-    new: BlockColliderInfoHandle,
-    colliders: &mut ColliderSet,
-    islands: &mut IslandManager,
-    bodies: &mut RigidBodySet,
-  ) {
-    let key = PackedChunkletCoords::from_xyz(cx, cy, cz);
-    let old_blocks = match self.chunklets.get(&key) {
-      Some(arc) => arc.blocks,
-      None => {
-        log::error!("no chunk at {cx} {cy} {cz}");
-        return;
-      }
-    };
-
-    assert_eq!(
-      size_of::<BlockColliderInfoHandle>(),
-      size_of::<Option<NonZeroU32>>()
-    );
-    assert_eq!(
-      Self::handle_to_blockhandle(BlockColliderInfoHandle(0)),
-      None
-    );
-    assert_eq!(
-      Self::handle_to_blockhandle(BlockColliderInfoHandle(1)),
-      NonZeroU32::new(1)
-    );
-
-    let mut blocks = old_blocks;
-    blocks[Chunklet::index(x, y, z) as usize] = Self::handle_to_blockhandle(new);
-
-    if blocks.iter().all(|b| b.is_none()) {
-      self.chunklets.remove(&key);
-      if let Some(handle) = self.colliders.remove(&key) {
-        colliders.remove(handle, islands, bodies, true);
-      }
-    } else {
-      let c = Chunklet::new(cx, cy as i32, cz, blocks);
-      let arc = Arc::new(c);
-      self.chunklets.insert(key, arc.clone());
-      if let Some(handle) = self.colliders.remove(&key) {
-        colliders.remove(handle, islands, bodies, true);
-      }
-      let handle = colliders.insert(
-        ColliderBuilder::new(SharedShape(arc as Arc<dyn Shape>))
-          .translation(Vec3::new(
-            (cx * 16) as Real,
-            (cy as i32 * 16) as Real,
-            (cz * 16) as Real,
-          ))
-          .build(),
-      );
-      self.colliders.insert(key, handle);
-    }
-  }
-  pub fn remove(
-    &mut self,
-    x: i32,
-    y: u8,
-    z: i32,
-    colliders: &mut ColliderSet,
-    islands: &mut IslandManager,
-    bodies: &mut RigidBodySet,
-  ) -> Option<Arc<Chunklet>> {
-    let key = PackedChunkletCoords::from_xyz(x, y, z);
-    let chunklet = self.chunklets.remove(&key);
-    if let Some(handle) = self.colliders.remove(&key) {
-      colliders.remove(handle, islands, bodies, true);
-    }
-    chunklet
-  }
-  pub fn put(
-    &mut self,
-    x: i32,
-    y: u8,
-    z: i32,
-    c: Chunklet,
-    colliders: &mut ColliderSet,
-  ) -> ColliderHandle {
-    let arc = Arc::new(c);
-    let shared = SharedShape(arc.clone() as Arc<dyn Shape>);
-    let handle = colliders.insert(
-      ColliderBuilder::new(shared)
-        .translation(Vec3::new(
-          (x * 16) as Real,
-          (y * 16) as Real,
-          (z * 16) as Real,
-        ))
-        .build(),
-    );
-    self
-      .chunklets
-      .insert(PackedChunkletCoords::from_xyz(x, y, z), arc);
-    self
-      .colliders
-      .insert(PackedChunkletCoords::from_xyz(x, y, z), handle);
-    handle
-  }
-}
 //Option<NonZeroU32> is 32 bits
 type BlockHandle = Option<NonZeroU32>;
 //16x16x16 block grid
@@ -198,6 +24,7 @@ pub struct Chunklet {
   pub cx: i32,
   pub cy: i32,
   pub cz: i32,
+  block_count: u32,
 }
 impl Chunklet {
   pub fn new_with_blockhandle(
@@ -220,12 +47,14 @@ impl Chunklet {
     let mut min = [u8::MAX, u8::MAX, u8::MAX];
     let mut max = [u8::MIN, u8::MIN, u8::MIN];
     let mut tree = Octree::new(CHUNK_SIDE_LOG2 as u32);
+    let mut block_count = 0u32;
 
     for x in 0..CHUNK_SIDE as u8 {
       for y in 0..CHUNK_SIDE as u8 {
         for z in 0..CHUNK_SIDE as u8 {
           let i = Self::index(x, y, z) as usize;
           if let Some(handle) = blocks[i] {
+            block_count += 1;
             min[0] = min[0].min(x);
             min[1] = min[1].min(y);
             min[2] = min[2].min(z);
@@ -288,7 +117,21 @@ impl Chunklet {
       cx,
       cy,
       cz,
+      block_count,
     }
+  }
+  pub fn count(&self) -> u32 {
+    self.block_count
+  }
+  fn on_boundary(&self, x: u8, y: u8, z: u8) -> bool {
+    let min = self.aabb.mins;
+    let max = self.aabb.maxs;
+    (x as f32) == min.x
+      || (x as f32 + 1.0) == max.x
+      || (y as f32) == min.y
+      || (y as f32 + 1.0) == max.y
+      || (z as f32) == min.z
+      || (z as f32 + 1.0) == max.z
   }
   fn recompute_aabb(&mut self) {
     let mut min = [u8::MAX, u8::MAX, u8::MAX];
@@ -320,9 +163,26 @@ impl Chunklet {
 
   #[inline(always)]
   pub fn set(&mut self, x: u8, y: u8, z: u8, value: Option<NonZeroU32>) {
-    self.blocks[Self::index(x, y, z) as usize] = value;
+    let i = Self::index(x, y, z) as usize;
+    let old = self.blocks[i];
+    self.blocks[i] = value;
     self.tree.set_block(x, y, z, value.map(|x| x.get()));
-    self.recompute_aabb();
+    match (old, value) {
+      (Some(_), Some(_)) => {}
+      (None, None) => {}
+      (None, Some(_)) => {
+        self.block_count += 1;
+        let p = Vec3::new(x as f32, y as f32, z as f32);
+        self.aabb.take_point(p);
+        self.aabb.take_point(p + Vec3::new(1.0, 1.0, 1.0));
+      }
+      (Some(_), None) => {
+        self.block_count -= 1;
+        if self.block_count > 0 && self.on_boundary(x, y, z) {
+          self.recompute_aabb();
+        }
+      }
+    }
   }
 
   #[inline(always)]
@@ -334,7 +194,7 @@ impl Chunklet {
     )
   }
   #[inline(always)]
-  fn index(x: u8, y: u8, z: u8) -> u16 {
+  pub fn index(x: u8, y: u8, z: u8) -> u16 {
     (y as u16) << 8 | (z as u16) << 4 | x as u16
   }
   #[inline(always)]
@@ -363,6 +223,7 @@ impl Shape for Chunklet {
     _scale: rapier3d::prelude::Vector,
     _num_subdivisions: u32,
   ) -> Option<Box<dyn Shape>> {
+    //this could actually be very nice to have as an option
     todo!()
   }
 
@@ -426,134 +287,9 @@ impl RayCast for Chunklet {
 impl PointQuery for Chunklet {
   fn project_local_point(&self, _pt: Vec3, _solid: bool) -> PointProjection {
     todo!()
-    // let mut best_sq_dist = Real::MAX;
-    // let mut best = PointProjection::new(false, pt);
-    //
-    // let mut stack: Vec<(usize, u8, u8, u8, u32)> = Vec::new();
-    // stack.push((self.tree.root_index(), 0, 0, 0, CHUNK_SIDE_LOG2 as u32));
-    //
-    // while let Some((node, cx, cy, cz, log2_sz)) = stack.pop() {
-    //   if self.tree.is_empty(node) {
-    //     continue;
-    //   }
-    //
-    //   if self.tree.is_leaf(node) {
-    //     let aabb = Aabb::new(
-    //       Vec3::new(cx as f32, cy as f32, cz as f32),
-    //       Vec3::new(cx as f32 + 1.0, cy as f32 + 1.0, cz as f32 + 1.0),
-    //     );
-    //     let proj = aabb.project_local_point(pt, solid);
-    //     let d2 = (proj.point - pt).length_squared();
-    //     if d2 < best_sq_dist {
-    //       best_sq_dist = d2;
-    //       best = proj;
-    //       if best_sq_dist == 0.0 {
-    //         break;
-    //       }
-    //     }
-    //   } else if self.tree.is_branch(node) {
-    //     let child_log2 = log2_sz - 1;
-    //     let step = 1 << child_log2;
-    //
-    //     for octant in 0..8 {
-    //       let child = self.tree.child_index(node, octant);
-    //       if self.tree.is_empty(child) {
-    //         continue;
-    //       }
-    //
-    //       let child_cx = cx + ((octant & 1) as u8) * step;
-    //       let child_cy = cy + (((octant >> 1) & 1) as u8) * step;
-    //       let child_cz = cz + (((octant >> 2) & 1) as u8) * step;
-    //
-    //       if child_log2 == 0 {
-    //         stack.push((child, child_cx, child_cy, child_cz, child_log2));
-    //       } else {
-    //         let sz = step as f32;
-    //         let child_aabb = Aabb::new(
-    //           Vec3::new(child_cx as f32, child_cy as f32, child_cz as f32),
-    //           Vec3::new(
-    //             child_cx as f32 + sz,
-    //             child_cy as f32 + sz,
-    //             child_cz as f32 + sz,
-    //           ),
-    //         );
-    //         let d2 = child_aabb.distance_to_local_point(pt, true);
-    //         if d2 * d2 < best_sq_dist {
-    //           stack.push((child, child_cx, child_cy, child_cz, child_log2));
-    //         }
-    //       }
-    //     }
-    //   }
-    // }
-    //
-    // best
   }
 
   fn project_local_point_and_get_feature(&self, _pt: Vec3) -> (PointProjection, FeatureId) {
-    //   let mut best_sq_dist = Real::MAX;
-    //   let mut best = PointProjection::new(false, pt);
-    //   let mut best_voxel = 0u16;
-    //
-    //   let mut stack: Vec<(usize, u8, u8, u8, u32)> = Vec::new();
-    //   stack.push((self.tree.root_index(), 0, 0, 0, CHUNK_SIDE_LOG2 as u32));
-    //
-    //   while let Some((node, cx, cy, cz, log2_sz)) = stack.pop() {
-    //     if self.tree.is_empty(node) {
-    //       continue;
-    //     }
-    //
-    //     if self.tree.is_leaf(node) {
-    //       let aabb = Aabb::new(
-    //         Vec3::new(cx as f32, cy as f32, cz as f32),
-    //         Vec3::new(cx as f32 + 1.0, cy as f32 + 1.0, cz as f32 + 1.0),
-    //       );
-    //       let proj = aabb.project_local_point(pt, false);
-    //       let d2 = (proj.point - pt).length_squared();
-    //       if d2 < best_sq_dist {
-    //         best_sq_dist = d2;
-    //         best = proj;
-    //         best_voxel = Self::index(cx, cy, cz);
-    //         if best_sq_dist == 0.0 {
-    //           break;
-    //         }
-    //       }
-    //     } else if self.tree.is_branch(node) {
-    //       let child_log2 = log2_sz - 1;
-    //       let step = 1 << child_log2;
-    //
-    //       for octant in 0..8 {
-    //         let child = self.tree.child_index(node, octant);
-    //         if self.tree.is_empty(child) {
-    //           continue;
-    //         }
-    //
-    //         let child_cx = cx + ((octant & 1) as u8) * step;
-    //         let child_cy = cy + (((octant >> 1) & 1) as u8) * step;
-    //         let child_cz = cz + (((octant >> 2) & 1) as u8) * step;
-    //
-    //         if child_log2 == 0 {
-    //           stack.push((child, child_cx, child_cy, child_cz, child_log2));
-    //         } else {
-    //           let sz = step as f32;
-    //           let child_aabb = Aabb::new(
-    //             Vec3::new(child_cx as f32, child_cy as f32, child_cz as f32),
-    //             Vec3::new(
-    //               child_cx as f32 + sz,
-    //               child_cy as f32 + sz,
-    //               child_cz as f32 + sz,
-    //             ),
-    //           );
-    //           let d2 = child_aabb.distance_to_local_point(pt, true);
-    //           if d2 * d2 < best_sq_dist {
-    //             stack.push((child, child_cx, child_cy, child_cz, child_log2));
-    //           }
-    //         }
-    //       }
-    //     }
-    //   }
-    //
-    //   (best, FeatureId::Face(best_voxel as u32))
-    // }
     todo!()
   }
 }

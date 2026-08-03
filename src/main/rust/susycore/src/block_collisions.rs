@@ -1,36 +1,24 @@
-use std::collections::HashMap;
-use std::hash::Hash;
 use std::mem::{self};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use jni::EnvUnowned;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
 use jni::sys::{jdouble, jfloat, jint, jlong};
-use ordered_float::OrderedFloat;
 use rapier3d::glamx::Quat;
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::Aabb;
 use rapier3d::parry::shape::Cuboid;
-use rapier3d::prelude::{
-  Collider, ColliderBuilder, ColliderHandle, QueryFilter, RigidBodyHandle, SharedShape,
-};
+use rapier3d::prelude::{Collider, ColliderBuilder, QueryFilter, RigidBodyHandle, SharedShape};
 
-use crate::{IHateJava, Real};
 use crate::chunklet::Chunklet;
 use crate::scene::Scene;
+use crate::{IHateJava, Real};
 //TODO callbacks
 
-pub struct ShapeCache(
-  pub HashMap<(OrderedFloat<f32>, OrderedFloat<f32>, OrderedFloat<f32>), SharedShape>,
-);
-
-pub static SHAPE_CACHE: LazyLock<Mutex<ShapeCache>> =
-  LazyLock::new(|| Mutex::new(ShapeCache::new()));
 pub static COLLIDERS: RwLock<ColliderStore> = RwLock::new(ColliderStore::new());
 
 pub fn clear_caches() {
   COLLIDERS.write().unwrap().inner.clear();
-  SHAPE_CACHE.lock().unwrap().0.clear();
 }
 
 pub const AIR_HANDLE: BlockColliderInfoHandle = BlockColliderInfoHandle(0);
@@ -137,43 +125,20 @@ impl MinecraftBlockColliderInfo {
       .build()
   }
   fn into_compound(boxes: Vec<Aabb>) -> SharedShape {
-    let shape_cache = &mut *SHAPE_CACHE.lock().expect("rust bug not mine");
     SharedShape::compound(
       boxes
         .into_iter()
-        .map(|x| shape_cache.from_aabb(x))
+        .map(|x| {
+          let pose = Pose::from_parts(x.center(), Quat::IDENTITY);
+          (
+            pose,
+            SharedShape::cuboid(x.half_extents().x, x.half_extents().y, x.half_extents().z),
+          )
+        })
         .collect(),
     )
   }
 }
-impl Default for ShapeCache {
-  fn default() -> Self {
-    Self::new()
-  }
-}
-
-impl ShapeCache {
-  pub fn new() -> Self {
-    Self(Default::default())
-  }
-
-  pub fn from_aabb(&mut self, aabb: Aabb) -> (Pose, SharedShape) {
-    let pose = Pose::from_parts(aabb.center(), Quat::IDENTITY);
-    let half = aabb.half_extents();
-    let key = (
-      OrderedFloat(half.x),
-      OrderedFloat(half.y),
-      OrderedFloat(half.z),
-    );
-    if let Some(shape) = self.0.get(&key) {
-      return (pose, shape.clone());
-    }
-    let shape = SharedShape::cuboid(half.x, half.y, half.z);
-    self.0.insert(key, shape.clone());
-    (pose, shape)
-  }
-}
-
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
   mut env: EnvUnowned,

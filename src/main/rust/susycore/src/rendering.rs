@@ -35,7 +35,7 @@ mod imp {
     Scene::with_scenes(|scenes| {
       for scene in scenes.iter() {
         backend.stuff.clear();
-        scene.world.debug_render(&mut *pipeline, &mut *backend);
+        scene.world.debug_render(&mut pipeline, &mut *backend);
         backend.render();
       }
     });
