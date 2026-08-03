@@ -27,8 +27,8 @@ impl PackedChunkletCoords {
     debug_assert!(z.abs() < (3_000_000 >> 4));
     let packed = ((x < 0) as u64) << 63
       | ((z < 0) as u64) << 62
-      | (x.abs() as u64) << 38
-      | (z.abs() as u64) << 13
+      | (x.unsigned_abs() as u64) << 38
+      | (z.unsigned_abs() as u64) << 13
       | y as u64;
     Self(packed)
   }
@@ -57,6 +57,12 @@ pub const CHUNK_VOLUME: usize = CHUNK_SIDE.pow(3);
 pub struct TerrainData {
   pub chunklets: HashMap<PackedChunkletCoords, Arc<Chunklet>>,
   pub colliders: HashMap<PackedChunkletCoords, ColliderHandle>,
+}
+
+impl Default for TerrainData {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 impl TerrainData {
@@ -385,7 +391,7 @@ impl Shape for Chunklet {
               Cuboid::new(x.half_extents()),
             )
           })
-          .map(move |x| (x.0 * pose.clone(), x.1))
+          .map(move |x| (x.0 * pose, x.1))
           .map(|s| s.1.mass_properties(density).transform_by(&s.0))
       })
       .fold(MassProperties::default(), |acc, mp| acc + mp)

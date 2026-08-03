@@ -154,14 +154,14 @@ fn manifolds_chunklet_shape(
     let maxs = shape_aabb.maxs;
     (
       IVec3::new(
-        (mins.x.floor() as i32).max(0).min(15),
-        (mins.y.floor() as i32).max(0).min(15),
-        (mins.z.floor() as i32).max(0).min(15),
+        (mins.x.floor() as i32).clamp(0, 15),
+        (mins.y.floor() as i32).clamp(0, 15),
+        (mins.z.floor() as i32).clamp(0, 15),
       ),
       IVec3::new(
-        (maxs.x.ceil() as i32).max(0).min(15),
-        (maxs.y.ceil() as i32).max(0).min(15),
-        (maxs.z.ceil() as i32).max(0).min(15),
+        (maxs.x.ceil() as i32).clamp(0, 15),
+        (maxs.y.ceil() as i32).clamp(0, 15),
+        (maxs.z.ceil() as i32).clamp(0, 15),
       ),
     )
   };

@@ -15,7 +15,7 @@ use rapier3d::prelude::{
   Collider, ColliderBuilder, ColliderHandle, QueryFilter, RigidBodyHandle, SharedShape,
 };
 
-use crate::Real;
+use crate::{IHateJava, Real};
 use crate::chunklet::Chunklet;
 use crate::scene::Scene;
 //TODO callbacks
@@ -48,6 +48,12 @@ pub struct MinecraftBlockColliderInfo {
 
 pub struct ColliderStore {
   pub inner: Vec<MinecraftBlockColliderInfo>,
+}
+
+impl Default for ColliderStore {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 impl ColliderStore {
@@ -84,7 +90,7 @@ impl ColliderStore {
 
 impl MinecraftBlockColliderInfo {
   pub fn new(friction: Real, density: Real, restitution: Real, boxes: Vec<Aabb>) -> Self {
-    debug_assert!(boxes.len() >= 1);
+    debug_assert!(!boxes.is_empty());
     Self {
       friction,
       density,
@@ -98,7 +104,7 @@ impl MinecraftBlockColliderInfo {
     f: impl FnOnce(&MinecraftBlockColliderInfo) -> T,
   ) -> Option<T> {
     let colliders = COLLIDERS.read().expect("rust bug not mine");
-    colliders.get(h).map(|x| f(x))
+    colliders.get(h).map(f)
   }
   pub fn handle(self) -> BlockColliderInfoHandle {
     let colliders = &mut *COLLIDERS.write().expect("rust bug not mine");
@@ -112,14 +118,14 @@ impl MinecraftBlockColliderInfo {
       let aabb = &self.boxes[0];
       let cuboid = Cuboid::new(aabb.half_extents());
       let shape = SharedShape(Arc::new(cuboid));
-      return Self::to_collider(shape, self.friction, self.restitution, self.density);
+      Self::to_collider(shape, self.friction, self.restitution, self.density)
     } else {
-      return Self::to_collider(
+      Self::to_collider(
         Self::into_compound(self.boxes),
         self.friction,
         self.restitution,
         self.density,
-      );
+      )
     }
   }
 
@@ -140,6 +146,12 @@ impl MinecraftBlockColliderInfo {
     )
   }
 }
+impl Default for ShapeCache {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl ShapeCache {
   pub fn new() -> Self {
     Self(Default::default())
@@ -172,7 +184,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
   z: jint,
   data: JIntArray,
 ) {
-  debug_assert!(y >= 0 && y <= 16, "xyz: {x} {y} {z}");
+  debug_assert!((0..=16).contains(&y), "xyz: {x} {y} {z}");
   // let mut buffer: [[i32; 4096]; 16] = [[0; 4096]; 16];
   let mut buffer: [i32; 4096] = [0; 4096];
   env
@@ -193,7 +205,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
   }
 
   Scene::with_scene_mut(world_id as usize, |xs| {
-    let b = buffer.map(|x| x as u32).map(|x| BlockColliderInfoHandle(x));
+    let b = buffer.map(|x| x as u32).map(BlockColliderInfoHandle);
     let c = Chunklet::new_with_blockhandle(x, y, z, b);
     xs.add_chunklet(x, y as u8, z, c);
   });
@@ -219,18 +231,14 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_RbInfo(
   world_id: jint,
   handle: jlong,
 ) {
-  let handle = handle as u64;
-  let handle = ColliderHandle(unsafe { mem::transmute(handle) });
+  let handle = handle.collider_handle();
+
   log::info!("handle:{handle:?}");
   Scene::with_scene(world_id as usize, |xs| {
-    let c = xs.collider_set.get(handle);
+    let c = xs.world.colliders.get(handle);
     if let Some(collider) = c {
       log::info!("collider obtained\nc:{collider:#?}");
-      if let Some(rb) = collider
-        .parent()
-        .map(|x| xs.rigid_body_set.get(x))
-        .flatten()
-      {
+      if let Some(rb) = collider.parent().and_then(|x| xs.world.bodies.get(x)) {
         log::info!(
           "rb obtained from handle {:?}\nrb:{rb:#?}",
           collider.parent()
@@ -286,8 +294,8 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
 
   //TODO a Vec<f64> can be transmuted into Vec<Aabb> if Real = f64
-  debug_assert!(aabbs_data.len() % 6 == 0);
-  debug_assert!(aabbs_data.capacity() % 6 == 0);
+  debug_assert!(aabbs_data.len().is_multiple_of(6));
+  debug_assert!(aabbs_data.capacity().is_multiple_of(6));
   let mut boxes: Vec<Real> = aabbs_data.into_iter().map(|x| x as Real).collect();
 
   #[cfg(debug_assertions)]
@@ -327,15 +335,21 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunk(
   y: jint,
   z: jint,
 ) {
-  debug_assert!(y >= 0 && y <= 16, "removeChunk: xyz=({}, {}, {})", x, y, z);
+  debug_assert!(
+    (0..=16).contains(&y),
+    "removeChunk: xyz=({}, {}, {})",
+    x,
+    y,
+    z
+  );
   Scene::with_scene_mut(world_id as usize, |xs| {
     xs.terrain.remove(
       x,
       y as u8,
       z,
-      &mut xs.collider_set,
-      &mut xs.island_manager,
-      &mut xs.rigid_body_set,
+      &mut xs.world.colliders,
+      &mut xs.world.islands,
+      &mut xs.world.bodies,
     );
   });
 }
@@ -355,10 +369,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
   new_data: jint,
 ) {
   debug_assert!(world_id >= 0);
-  debug_assert!(x < 16 && x >= 0);
-  debug_assert!(y < 16 && y >= 0);
-  debug_assert!(z < 16 && z >= 0);
-  debug_assert!(cy < 16 && cy >= 0);
+  debug_assert!((0..16).contains(&x));
+  debug_assert!((0..16).contains(&y));
+  debug_assert!((0..16).contains(&z));
+  debug_assert!((0..16).contains(&cy));
 
   Scene::with_scene_mut(world_id as usize, |xs| {
     xs.terrain.update(
@@ -369,9 +383,9 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
       y as u8,
       z as u8,
       BlockColliderInfoHandle(new_data as u32),
-      &mut xs.collider_set,
-      &mut xs.island_manager,
-      &mut xs.rigid_body_set,
+      &mut xs.world.colliders,
+      &mut xs.world.islands,
+      &mut xs.world.bodies,
     );
 
     let block_world_x = (cx * 16 + x) as f32;
@@ -387,10 +401,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
       ),
     );
 
-    let query_pipeline = xs.broad_phase.as_query_pipeline(
-      xs.narrow_phase.query_dispatcher(),
-      &xs.rigid_body_set,
-      &xs.collider_set,
+    let query_pipeline = xs.world.broad_phase.as_query_pipeline(
+      xs.world.narrow_phase.query_dispatcher(),
+      &xs.world.bodies,
+      &xs.world.colliders,
       QueryFilter::default(),
     );
 
@@ -400,7 +414,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
       .collect();
 
     for handle in to_wake {
-      if let Some(rb) = xs.rigid_body_set.get_mut(handle) {
+      if let Some(rb) = xs.world.bodies.get_mut(handle) {
         rb.wake_up(true);
       }
     }

@@ -203,11 +203,11 @@ impl Octree {
   }
 
   pub fn delete_branch(&mut self, parent_index: usize) {
-    let branch_start = self.data[parent_index as usize];
+    let branch_start = self.data[parent_index];
     if branch_start <= 0 {
       return;
     }
-    self.data[parent_index as usize] = 0;
+    self.data[parent_index] = 0;
     self.data[branch_start as usize] = self.free_space_index_head;
     self.free_space_index_head = branch_start;
     for i in 1..8 {

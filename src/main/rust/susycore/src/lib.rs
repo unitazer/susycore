@@ -10,7 +10,9 @@ use std::env;
 use std::time::Instant;
 
 use jni::errors::{Error, ThrowRuntimeExAndDefault};
+use jni::sys::jlong;
 use jni::{EnvUnowned, objects::JClass};
+use rapier3d::geometry::ColliderHandle;
 use rapier3d::na::Vector3;
 
 use self::logger::SusycoreJavaLogger;
@@ -32,7 +34,7 @@ mod gl {
   include!(concat!(env!("OUT_DIR"), "/gl_bindings.rs"));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod glsmit {
   use std::{
     ffi::{CStr, CString, c_void},
@@ -57,7 +59,8 @@ mod glsmit {
   }
 }
 
-fn goog() {
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_common_Native_goog(_env: EnvUnowned, _class: JClass) {
   let now = Instant::now();
   log::info!("logger goog...");
   log::info!("logger took {:?} to goog...", now.elapsed());
@@ -71,10 +74,6 @@ fn goog() {
     env!("CARGO_PKG_VERSION"),
     build
   );
-}
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_supersymmetry_common_Native_goog(_env: EnvUnowned, _class: JClass) {
-  goog();
 }
 
 #[unsafe(no_mangle)]
@@ -95,4 +94,18 @@ pub extern "system" fn Java_supersymmetry_common_Native_init(mut env: EnvUnowned
       Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>();
+}
+pub fn jlong_handle(h: ColliderHandle) -> jlong {
+  let (left, right) = h.into_raw_parts();
+  ((left as u64) << 32 | right as u64) as jlong
+}
+pub trait IHateJava {
+  fn collider_handle(self) -> ColliderHandle;
+}
+
+impl IHateJava for jni::sys::jlong {
+  fn collider_handle(self) -> ColliderHandle {
+    let v = self as u64;
+    ColliderHandle::from_raw_parts((v >> 32) as u32, v as u32)
+  }
 }
