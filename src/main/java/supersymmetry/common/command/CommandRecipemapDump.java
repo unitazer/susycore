@@ -613,6 +613,7 @@ public class CommandRecipemapDump extends CommandBase {
         for (ResourceLocation key : GregTechAPI.MTE_REGISTRY.getKeys()) {
             var machineObj = new JsonObject();
             MetaTileEntity machine = GregTechAPI.MTE_REGISTRY.getObject(key);
+            machineObj.add("item", stackToJson(machine.getStackForm()));
             machineObj.addProperty("class", machine.getClass().toString());
             machineObj.addProperty("metaName", machine.getMetaName());
             machineObj.addProperty("isController", machine instanceof MultiblockControllerBase);
