@@ -883,7 +883,9 @@ public class CommandRecipemapDump extends CommandBase {
             multiObj.addProperty("allowsFlip", multiblock.allowsFlip());
 
             if (multiblock instanceof RecipeMapMultiblockController rmm) {
-                multiObj.addProperty("recipemapName", rmm.recipeMap.getUnlocalizedName());
+                if (rmm.recipeMap != null) {
+                    multiObj.addProperty("recipemapName", rmm.recipeMap.getUnlocalizedName());
+                }
                 var workable = rmm.getRecipeMapWorkable();
                 if (workable != null) {
                     multiObj.addProperty("workable", workable.getName());
@@ -967,7 +969,7 @@ public class CommandRecipemapDump extends CommandBase {
                     if (infos == null) continue;
                     for (var info : infos) {
                         if (info.getTileEntity() instanceof IGregTechTileEntity gtTe &&
-                                gtTe.getMetaTileEntity() instanceof IMultiblockAbilityPart<?>ap) {
+                                gtTe.getMetaTileEntity() instanceof IMultiblockAbilityPart<?> ap) {
                             var name = getAbilityName(ap.getAbility());
                             if (name != null && seen.add(name)) {
                                 abilities.add(name);
