@@ -42,6 +42,7 @@ import com.google.gson.*;
 import dev.tianmi.sussypatches.api.recipe.property.InfoProperty;
 import gregtech.api.GTValues;
 import gregtech.api.GregTechAPI;
+import gregtech.api.capability.IMultipleRecipeMaps;
 import gregtech.api.metatileentity.ITieredMetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.WorkableTieredMetaTileEntity;
@@ -810,7 +811,7 @@ public class CommandRecipemapDump extends CommandBase {
 
             var obj = new JsonObject();
             obj.addProperty("metaName", mte.getMetaName());
-            obj.addProperty("class", mte.getClass().getName());
+            obj.addProperty("class", mte.getClass().toString());
 
             var ability = getAbilityName(abilityPart.getAbility());
             if (ability != null) {
@@ -880,6 +881,22 @@ public class CommandRecipemapDump extends CommandBase {
             multiObj.addProperty("metaName", mte.getMetaName());
             multiObj.addProperty("allowsExtendedFacing", multiblock.allowsExtendedFacing());
             multiObj.addProperty("allowsFlip", multiblock.allowsFlip());
+
+            if (multiblock instanceof RecipeMapMultiblockController rmm) {
+                multiObj.addProperty("recipemapName", rmm.recipeMap.getUnlocalizedName());
+                var workable = rmm.getRecipeMapWorkable();
+                if (workable != null) {
+                    multiObj.addProperty("workable", workable.getName());
+                    multiObj.addProperty("workableParallelLogicType", workable.getParallelLogicType().toString());
+                }
+            }
+            if (multiblock instanceof IMultipleRecipeMaps multiMap) {
+                JsonArray maps = new JsonArray();
+                for (RecipeMap<?> map : multiMap.getAvailableRecipeMaps()) {
+                    maps.add(map.getUnlocalizedName());
+                }
+                multiObj.add("availableRecipeMaps", maps);
+            }
 
             var pattern = multiblock.structurePattern;
             if (pattern == null) continue;
