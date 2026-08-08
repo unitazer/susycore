@@ -6,18 +6,26 @@
   "compatibilityLevel" : "JAVA_8",
   "mixins" : [
     "BlockFireMixin",
+    "ChunkAccessor",
     "ChunkMixin",
+    "ChunkProviderServerMixin",
     "EntityElytraMixin",
     "EntityFallingBlockMixin",
     "EntityMinecartMixin",
     "EntityMixin",
     "EntityPlayerMixin",
-    "EntityTNTPrimedMixin"
+    "EntityTNTPrimedMixin",
+    "PlayerChunkMapMixin",
+    "WorldMixin"
   ],
   "client" : [
     "BlockModelRendererMixin",
+    "ChunkProviderClientMixin",
+    "ChunkRenderWorkerMixin",
     "RenderChunkMixin",
-    "TileEntityRendererDispatcherMixin",
-    "RenderGlobalMixin"
+    "RenderGlobalAccessor",
+    "RenderGlobalMixin",
+    "TileEntityMixin",
+    "TileEntityRendererDispatcherMixin"
   ]
 }

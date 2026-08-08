@@ -26,10 +26,12 @@ import net.minecraftforge.fml.common.eventhandler.EventPriority;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
+import net.minecraftforge.registries.DataSerializerEntry;
 import net.minecraftforge.registries.IForgeRegistry;
 
 import org.jetbrains.annotations.NotNull;
 
+import gregtech.api.block.VariantActiveBlock;
 import gregtech.api.block.VariantItemBlock;
 import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.modules.ModuleContainerRegistryEvent;
@@ -43,10 +45,13 @@ import gregtech.modules.ModuleManager;
 import software.bernie.geckolib3.GeckoLib;
 import supersymmetry.Supersymmetry;
 import supersymmetry.api.SusyLog;
+import supersymmetry.api.block.BlockExtraDataRegistry;
+import supersymmetry.api.block.VariantActiveBlockExtraDataHandler;
 import supersymmetry.api.blocks.VariantItemBlockFalling;
 import supersymmetry.api.event.MobHordeEvent;
 import supersymmetry.api.fluids.SusyGeneratedFluidHandler;
 import supersymmetry.api.particle.Particles;
+import supersymmetry.api.phys.QuaternionDataSerializer;
 import supersymmetry.api.space.CelestialObjects;
 import supersymmetry.api.unification.ore.SusyOrePrefix;
 import supersymmetry.api.unification.ore.SusyStoneTypes;
@@ -73,6 +78,7 @@ public class CommonProxy {
         SusyStoneTypes.init();
         Particles.init();
         Particles.register();
+        BlockExtraDataRegistry.register(VariantActiveBlock.class, VariantActiveBlockExtraDataHandler.INSTANCE);
         Native.init();
         Native.goog();
     }
@@ -139,6 +145,12 @@ public class CommonProxy {
         // Remove the ULV energy hatches from multiblock preview, they are a trap for new players
         MultiblockAbility.REGISTRY.get(MultiblockAbility.INPUT_ENERGY).remove(0);
         MultiblockAbility.REGISTRY.get(MultiblockAbility.OUTPUT_ENERGY).remove(0);
+    }
+
+    @SubscribeEvent
+    public static void registerDataSerializers(@NotNull RegistryEvent.Register<DataSerializerEntry> event) {
+        event.getRegistry().register(
+                new DataSerializerEntry(QuaternionDataSerializer.INSTANCE).setRegistryName("susycore_quaternion"));
     }
 
     @SubscribeEvent

@@ -8,7 +8,6 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 
 import org.jetbrains.annotations.NotNull;
 
@@ -32,8 +31,8 @@ import supersymmetry.api.SusyLog;
 import supersymmetry.api.phys.DebugCuboidEntity;
 import supersymmetry.api.phys.DebugSphereEntity;
 import supersymmetry.api.phys.PhysicsWorldEntity;
-import supersymmetry.api.phys.PocketWorld;
 import supersymmetry.api.phys.Rapier;
+import supersymmetry.api.subworld.SubWorldPlot;
 
 public class TestingMTE extends MultiblockWithDisplayBase {
 
@@ -86,8 +85,6 @@ public class TestingMTE extends MultiblockWithDisplayBase {
         return createUITemplate(entityPlayer).build(getHolder(), entityPlayer);
     }
 
-    //
-    // private static long BallHandle = 0;
 
     protected ModularUI.Builder createUITemplate(EntityPlayer entityPlayer) {
         ModularUI.Builder builder = ModularUI.builder(GuiTextures.BACKGROUND, 198, 208);
@@ -161,6 +158,7 @@ public class TestingMTE extends MultiblockWithDisplayBase {
     }
 
     private void goog() {
+        SusyLog.logger.info("goog in TestingMTE");
         if (this.isStructureFormed() && this.structurePattern != null) {
             var cache = this.structurePattern.cache;
             var box = new AxisAlignedBB(this.getPos());
@@ -169,35 +167,52 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                 box = box.union(new AxisAlignedBB(pos));
             }
 
-            var center = box.getCenter();
-            var offsetd = (Vec3d.ZERO.subtract(center)).add(new Vec3d(0d, 127d, 0d));
-            var offset = new BlockPos(offsetd.x, offsetd.y, offsetd.z);
+            var offset = new BlockPos(1 - (int) box.minX, 1 - (int) box.minY, 1 - (int) box.minZ);
+
+            float sx = (float) (box.maxX - box.minX);
+            float sy = (float) (box.maxY - box.minY);
+            float sz = (float) (box.maxZ - box.minZ);
+
+            int minLocalX = Integer.MAX_VALUE;
+            int maxLocalX = Integer.MIN_VALUE;
+            int minLocalZ = Integer.MAX_VALUE;
+            int maxLocalZ = Integer.MIN_VALUE;
+            for (Long2ObjectMap.Entry<BlockInfo> entry : cache.long2ObjectEntrySet()) {
+                BlockPos lpos = BlockPos.fromLong(entry.getLongKey()).add(offset);
+                minLocalX = Math.min(minLocalX, lpos.getX());
+                maxLocalX = Math.max(maxLocalX, lpos.getX());
+                minLocalZ = Math.min(minLocalZ, lpos.getZ());
+                maxLocalZ = Math.max(maxLocalZ, lpos.getZ());
+            }
+            int sizeChunksX = (maxLocalX >> 4) + 1;
+            int sizeChunksZ = (maxLocalZ >> 4) + 1;
 
             var entity = new PhysicsWorldEntity(this.getWorld());
-            entity.setPosition(-offset.getX(), -offset.getY() + 127, -offset.getZ());
+            entity.setPosition(box.minX + sx / 2.0, box.minY + sy / 2.0, box.minZ + sz / 2.0);
 
-            var world = new PocketWorld(entity);
+            var plot = SubWorldPlot.create(this.getWorld(), sizeChunksX, sizeChunksZ);
+            entity.attachPlot(plot);
+            // SusyLog.logger.info("goog: machine={} box={} offset={} entity={} plot={}", this.getPos(), box, offset,
+            //         entity.getPosition(), plot.getRect());
+
+            entity.setRotation(0f, 0f, 0f, 1f);
+            entity.setRotationPoint(sx / 2.0f + 1.0f, sy / 2.0f + 1.0f, sz / 2.0f + 1.0f);
+            entity.setPlotSize(sx, sy, sz);
+            // SusyLog.logger.info("goog: pose quat=(0,0,0,1) rotationPoint=({},{},{}) size=({},{},{})",
+            //         sx / 2.0f + 1.0f, sy / 2.0f + 1.0f, sz / 2.0f + 1.0f, sx, sy, sz);
 
             var toRemove = new ArrayList<BlockPos>();
             for (Long2ObjectMap.Entry<BlockInfo> entry : cache.long2ObjectEntrySet()) {
                 BlockPos lpos = BlockPos.fromLong(entry.getLongKey());
-                var pos = lpos.add(offset);
-                world.setBlockState(pos, entry.getValue().getBlockState());
+                var local = lpos.add(offset);
                 TileEntity te = entry.getValue().getTileEntity();
-                if (te != null) {
-                    NBTTagCompound tag = te.serializeNBT();
-                    world.removeTileEntity(pos);
-                    world.setBlockState(pos, entry.getValue().getBlockState());
-                    TileEntity fresh = world.getTileEntity(pos);
-                    if (fresh != null) {
-                        fresh.deserializeNBT(tag);
-                        fresh.setPos(pos);
-                    }
-                }
+                NBTTagCompound tag = te != null ? te.serializeNBT() : null;
+                entity.transferExtraState(lpos, local);
+                entity.setPlotBlock(local, entry.getValue().getBlockState(), tag);
                 toRemove.add(lpos);
             }
 
-            entity.updatePocketBounds();
+            plot.seedLight();
             this.getWorld().spawnEntity(entity);
             for (BlockPos lpos : toRemove) {
                 this.getWorld().setBlockToAir(lpos);

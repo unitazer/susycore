@@ -159,10 +159,6 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
       Ok(())
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
-  // info!(
-  //   "addChunk: world={}, subchunk=({}, {}, {})",
-  //   world_id, x, y, z
-  // );
   let non_zero_count = buffer.iter().filter(|x| **x != 0).count();
   if non_zero_count == 0 {
     log::error!("empty subchunk supplied, shouldve been filtered out");
@@ -174,19 +170,6 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
     let c = Chunklet::new_with_blockhandle(x, y, z, b);
     xs.add_chunklet(x, y as u8, z, c);
   });
-  // let _world = Scene::with_scene_mut(0, |xs| {
-  //   (0..16) //.par_bridge()
-  //     .for_each(|i| {
-  //       if buffer[i].iter().all(|x| *x == 0) {
-  //       } else {
-  //         let b = buffer[i]
-  //           .map(|x| x as u32)
-  //           .map(|x| BlockColliderInfoHandle(x));
-  //         let c = Chunklet::new_with_blockhandle(b);
-  //         xs.add_chunklet(x, i as u8, z, c);
-  //       }
-  //     });
-  // });
 }
 
 #[unsafe(no_mangle)]

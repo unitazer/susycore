@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 import net.minecraft.item.EnumDyeColor;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.math.Vec3d;
 
 import gregtech.api.GTValues;
 import gregtech.api.unification.material.Material;
@@ -106,6 +107,13 @@ public class SuSyUtility {
         coolants.put("distilled_water", new Coolant("DistilledWater", 8));
         coolants.put("coolant", new Coolant("Coolant", 4));
         coolants.put("advanced_coolant", new Coolant("AdvancedCoolant", 1));
+    }
+
+    public static Vec3d lerp(Vec3d from, Vec3d to, float t) {
+        return new Vec3d(
+                from.x + (to.x - from.x) * t,
+                from.y + (to.y - from.y) * t,
+                from.z + (to.z - from.z) * t);
     }
 
     public static ResourceLocation susyId(String path) {

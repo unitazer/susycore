@@ -6,7 +6,6 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.network.datasync.DataParameter;
-import net.minecraft.network.datasync.DataSerializers;
 import net.minecraft.network.datasync.EntityDataManager;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
@@ -15,14 +14,8 @@ import net.minecraft.world.WorldServer;
 
 public class AbstractPhysicsEntity extends Entity {
 
-    private static final DataParameter<Float> QW = EntityDataManager.createKey(AbstractPhysicsEntity.class,
-            DataSerializers.FLOAT);
-    private static final DataParameter<Float> QX = EntityDataManager.createKey(AbstractPhysicsEntity.class,
-            DataSerializers.FLOAT);
-    private static final DataParameter<Float> QY = EntityDataManager.createKey(AbstractPhysicsEntity.class,
-            DataSerializers.FLOAT);
-    private static final DataParameter<Float> QZ = EntityDataManager.createKey(AbstractPhysicsEntity.class,
-            DataSerializers.FLOAT);
+    private static final DataParameter<Quaternion> ROTATION = EntityDataManager.createKey(AbstractPhysicsEntity.class,
+            QuaternionDataSerializer.INSTANCE);
 
     Optional<Long> colliderId = Optional.empty();
     Quaternion rotation = Quaternion.IDENTITY;
@@ -63,11 +56,7 @@ public class AbstractPhysicsEntity extends Entity {
     public void onUpdate() {
         super.onUpdate();
         if (this.world.isRemote) {
-            this.rotation = new Quaternion(
-                    this.dataManager.get(QW),
-                    this.dataManager.get(QX),
-                    this.dataManager.get(QY),
-                    this.dataManager.get(QZ));
+            this.rotation = this.dataManager.get(ROTATION);
         }
     }
 
@@ -77,10 +66,7 @@ public class AbstractPhysicsEntity extends Entity {
         if (!this.world.isRemote && this.world instanceof WorldServer && this.colliderId != null &&
                 !this.colliderId.isEmpty()) {
             Rapier.syncEntity(this);
-            this.dataManager.set(QW, (float) this.rotation.getW());
-            this.dataManager.set(QX, (float) this.rotation.getX());
-            this.dataManager.set(QY, (float) this.rotation.getY());
-            this.dataManager.set(QZ, (float) this.rotation.getZ());
+            this.dataManager.set(ROTATION, this.rotation);
         }
     }
 
@@ -138,9 +124,6 @@ public class AbstractPhysicsEntity extends Entity {
 
     @Override
     protected void entityInit() {
-        this.dataManager.register(QW, 1.0f);
-        this.dataManager.register(QX, 0.0f);
-        this.dataManager.register(QY, 0.0f);
-        this.dataManager.register(QZ, 0.0f);
+        this.dataManager.register(ROTATION, Quaternion.IDENTITY);
     }
 }

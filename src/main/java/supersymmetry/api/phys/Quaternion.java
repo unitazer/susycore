@@ -2,6 +2,7 @@ package supersymmetry.api.phys;
 
 import java.util.Objects;
 
+import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
 
 // https://en.wikipedia.org/wiki/Quaternion
@@ -101,6 +102,31 @@ public final class Quaternion {
         Quaternion qConj = q.conjugate();
         Quaternion rotated = q.multiply(pQuat).multiply(qConj);
         return new Vec3d(rotated.x + center.x, rotated.y + center.y, rotated.z + center.z);
+    }
+
+    public AxisAlignedBB rotateAABB(AxisAlignedBB box) {
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double minZ = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        double maxZ = Double.NEGATIVE_INFINITY;
+        for (int cx = 0; cx <= 1; cx++) {
+            for (int cy = 0; cy <= 1; cy++) {
+                for (int cz = 0; cz <= 1; cz++) {
+                    Vec3d corner = new Vec3d(cx == 0 ? box.minX : box.maxX, cy == 0 ? box.minY : box.maxY,
+                            cz == 0 ? box.minZ : box.maxZ);
+                    Vec3d r = rotatePoint(corner);
+                    minX = Math.min(minX, r.x);
+                    minY = Math.min(minY, r.y);
+                    minZ = Math.min(minZ, r.z);
+                    maxX = Math.max(maxX, r.x);
+                    maxY = Math.max(maxY, r.y);
+                    maxZ = Math.max(maxZ, r.z);
+                }
+            }
+        }
+        return new AxisAlignedBB(minX, minY, minZ, maxX, maxY, maxZ);
     }
 
     // this*(1-t)->other*t
