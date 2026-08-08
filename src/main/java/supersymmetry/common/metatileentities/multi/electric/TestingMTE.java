@@ -85,7 +85,6 @@ public class TestingMTE extends MultiblockWithDisplayBase {
         return createUITemplate(entityPlayer).build(getHolder(), entityPlayer);
     }
 
-
     protected ModularUI.Builder createUITemplate(EntityPlayer entityPlayer) {
         ModularUI.Builder builder = ModularUI.builder(GuiTextures.BACKGROUND, 198, 208);
         builder.widget(
@@ -193,13 +192,13 @@ public class TestingMTE extends MultiblockWithDisplayBase {
             var plot = SubWorldPlot.create(this.getWorld(), sizeChunksX, sizeChunksZ);
             entity.attachPlot(plot);
             // SusyLog.logger.info("goog: machine={} box={} offset={} entity={} plot={}", this.getPos(), box, offset,
-            //         entity.getPosition(), plot.getRect());
+            // entity.getPosition(), plot.getRect());
 
             entity.setRotation(0f, 0f, 0f, 1f);
             entity.setRotationPoint(sx / 2.0f + 1.0f, sy / 2.0f + 1.0f, sz / 2.0f + 1.0f);
             entity.setPlotSize(sx, sy, sz);
             // SusyLog.logger.info("goog: pose quat=(0,0,0,1) rotationPoint=({},{},{}) size=({},{},{})",
-            //         sx / 2.0f + 1.0f, sy / 2.0f + 1.0f, sz / 2.0f + 1.0f, sx, sy, sz);
+            // sx / 2.0f + 1.0f, sy / 2.0f + 1.0f, sz / 2.0f + 1.0f, sx, sy, sz);
 
             var toRemove = new ArrayList<BlockPos>();
             for (Long2ObjectMap.Entry<BlockInfo> entry : cache.long2ObjectEntrySet()) {

@@ -1,9 +1,9 @@
 package supersymmetry.api.subworld;
 
 public enum SubWorldRemovalReason {
-  REMOVED,
+    REMOVED,
 
-  ENTITY_DEAD,
+    ENTITY_DEAD,
 
-  WORLD_UNLOAD
+    WORLD_UNLOAD
 }

@@ -6,7 +6,7 @@ import java.util.List;
 public final class SubWorldAllocator {
 
     public static final int HEAP_SIZE_CHUNKS = 4096;
-      public static final int HEAP_ORIGIN_CHUNK = 1870848;
+    public static final int HEAP_ORIGIN_CHUNK = 1870848;
 
     public static final class Rect {
 

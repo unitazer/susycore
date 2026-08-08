@@ -78,6 +78,7 @@ public final class SubWorldContainer {
         this.allocator.free(plot.getRect());
         this.onAllocatorChanged();
     }
+
     public SubWorldPlot growPlot(SubWorldPlot plot, int targetSizeX, int targetSizeZ) {
         if (this.world.isRemote) {
             return plot;

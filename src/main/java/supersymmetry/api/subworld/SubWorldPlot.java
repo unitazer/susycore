@@ -21,7 +21,6 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import supersymmetry.mixins.minecraft.ChunkAccessor;
 
-
 public class SubWorldPlot {
 
     public static final int RENDER_ORIGIN_Y = 127;
