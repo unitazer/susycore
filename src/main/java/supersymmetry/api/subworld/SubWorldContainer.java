@@ -52,7 +52,7 @@ public final class SubWorldContainer {
             throw new IllegalStateException("not meant to work client side");
         }
         SubWorldAllocator.Rect rect = this.allocator.allocate(sizeChunksX, sizeChunksZ);
-        SubWorldPlot plot = new SubWorldPlot(this.world, rect.x, rect.z, rect.w, rect.h);
+        SubWorldPlot plot = new SubWorldPlot(this.world, rect);
         this.register(plot);
         this.onAllocatorChanged();
         return plot;
@@ -74,9 +74,21 @@ public final class SubWorldContainer {
     }
 
     public void freePlot(SubWorldPlot plot) {
-        this.remove(plot);
+        if (this.world.isRemote || !this.allPlots.contains(plot)) {
+            return;
+        }
+        plot.destroy();
         this.allocator.free(plot.getRect());
         this.onAllocatorChanged();
+    }
+
+    public void freeOwnedRect(SubWorldAllocator.Rect rect) {
+        if (this.world.isRemote) {
+            return;
+        }
+        if (this.allocator.freeOwned(rect)) {
+            this.onAllocatorChanged();
+        }
     }
 
     public SubWorldPlot growPlot(SubWorldPlot plot, int targetSizeX, int targetSizeZ) {
@@ -98,7 +110,7 @@ public final class SubWorldContainer {
         int dx = newRect.x - plot.getOriginChunkX();
         int dz = newRect.z - plot.getOriginChunkZ();
         plot.unregisterAllChunks();
-        SubWorldPlot moved = new SubWorldPlot(this.world, newRect.x, newRect.z, newRect.w, newRect.h);
+        SubWorldPlot moved = new SubWorldPlot(this.world, newRect);
         for (Chunk old : plot.getLoadedChunks().values()) {
             int nx = old.x + dx;
             int nz = old.z + dz;
@@ -170,10 +182,19 @@ public final class SubWorldContainer {
         if (this.pendingRemovals.isEmpty()) {
             return;
         }
-        for (SubWorldPlot plot : this.pendingRemovals.keySet()) {
+        boolean freed = false;
+        for (Map.Entry<SubWorldPlot, SubWorldRemovalReason> entry : this.pendingRemovals.entrySet()) {
+            SubWorldPlot plot = entry.getKey();
             plot.destroy();
+            if (!this.world.isRemote && entry.getValue() == SubWorldRemovalReason.ENTITY_DEAD) {
+                this.allocator.free(plot.getRect());
+                freed = true;
+            }
         }
         this.pendingRemovals.clear();
+        if (freed) {
+            this.onAllocatorChanged();
+        }
     }
 
     public void tick() {

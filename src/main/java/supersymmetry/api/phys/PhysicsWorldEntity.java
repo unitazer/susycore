@@ -37,6 +37,7 @@ import io.netty.buffer.ByteBuf;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.block.BlockExtraDataHandler;
 import supersymmetry.api.block.BlockExtraDataRegistry;
+import supersymmetry.api.subworld.SubWorldAllocator;
 import supersymmetry.api.subworld.SubWorldContainer;
 import supersymmetry.api.subworld.SubWorldPlot;
 import supersymmetry.api.subworld.SubWorldRegistry;
@@ -448,8 +449,15 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         if (compound.hasKey("sx") && compound.hasKey("sy") && compound.hasKey("sz")) {
             setPlotSize(compound.getFloat("sx"), compound.getFloat("sy"), compound.getFloat("sz"));
         }
+        if (world.isRemote) {
+            return;
+        }
+        if (sizeChunksX <= 0 || sizeChunksZ <= 0) {
+            return;
+        }
         List<BlockStateInfo> blocks = readBlocksFromNBT(compound);
-        rebuildPlot(originChunkX, originChunkZ, sizeChunksX, sizeChunksZ, blocks);
+        reallocatePlot(sizeChunksX, sizeChunksZ, blocks,
+                new SubWorldAllocator.Rect(originChunkX, originChunkZ, sizeChunksX, sizeChunksZ));
     }
 
     private void ensurePlotCovers(BlockPos local) {
@@ -529,10 +537,15 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         }
         SubWorldPlot rebuilt = new SubWorldPlot(world, originChunkX, originChunkZ, sizeChunksX, sizeChunksZ);
         SubWorldRegistry.register(rebuilt);
+        buildPlot(rebuilt, blocks);
+        plot = rebuilt;
+    }
+
+    private void buildPlot(SubWorldPlot target, List<BlockStateInfo> blocks) {
         for (BlockStateInfo info : blocks) {
             try {
-                BlockPos global = rebuilt.toGlobal(info.pos);
-                rebuilt.setBlockState(global, info.state, info.tileData);
+                BlockPos global = target.toGlobal(info.pos);
+                target.setBlockState(global, info.state, info.tileData);
                 if (info.extra != null) {
                     BlockExtraDataHandler handler = BlockExtraDataRegistry.get(info.state.getBlock());
                     if (handler != null) {
@@ -543,7 +556,24 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
                 SusyLog.logger.warn("PhysicsWorldEntity: failed to rebuild block at {} ({})", info.pos, info.state, e);
             }
         }
-        rebuilt.seedLight();
-        plot = rebuilt;
+        target.seedLight();
+    }
+
+    private void reallocatePlot(int sizeChunksX, int sizeChunksZ, List<BlockStateInfo> blocks,
+                                SubWorldAllocator.Rect previous) {
+        SubWorldContainer container = SubWorldContainer.getContainer(world);
+        if (container == null) {
+            rebuildPlot(previous.x, previous.z, sizeChunksX, sizeChunksZ, blocks);
+            return;
+        }
+        if (plot != null) {
+            container.replace(plot, SubWorldRemovalReason.REMOVED);
+        }
+        container.freeOwnedRect(previous);
+        SubWorldPlot reallocated = container.allocatePlot(sizeChunksX, sizeChunksZ);
+        buildPlot(reallocated, blocks);
+        plot = reallocated;
+        plotRelocated = true;
+        refreshPlotAABB();
     }
 }

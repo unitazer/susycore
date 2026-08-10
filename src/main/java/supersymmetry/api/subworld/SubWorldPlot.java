@@ -30,8 +30,12 @@ public class SubWorldPlot {
     private final Long2ObjectMap<Chunk> chunks = new Long2ObjectOpenHashMap<>();
 
     public SubWorldPlot(World world, int originChunkX, int originChunkZ, int sizeChunksX, int sizeChunksZ) {
+        this(world, new SubWorldAllocator.Rect(originChunkX, originChunkZ, sizeChunksX, sizeChunksZ));
+    }
+
+    public SubWorldPlot(World world, SubWorldAllocator.Rect rect) {
         this.world = world;
-        this.rect = new SubWorldAllocator.Rect(originChunkX, originChunkZ, sizeChunksX, sizeChunksZ);
+        this.rect = rect;
     }
 
     public static SubWorldPlot create(World world, int sizeChunksX, int sizeChunksZ) {

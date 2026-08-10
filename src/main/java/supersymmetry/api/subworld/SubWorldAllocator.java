@@ -35,6 +35,23 @@ public final class SubWorldAllocator {
         }
 
         @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Rect)) return false;
+            Rect r = (Rect) o;
+            return x == r.x && z == r.z && w == r.w && h == r.h;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = x;
+            result = 31 * result + z;
+            result = 31 * result + w;
+            result = 31 * result + h;
+            return result;
+        }
+
+        @Override
         public String toString() {
             return String.format("(%d,%d %dx%d)", x, z, w, h);
         }
@@ -58,6 +75,16 @@ public final class SubWorldAllocator {
         this.allocatedRects.clear();
         this.freeRects.add(new Rect(this.heapMinX, this.heapMinZ, this.heapSize, this.heapSize));
         for (Rect rect : allocated) {
+            if (rect.x < this.heapMinX || rect.z < this.heapMinZ
+                    || rect.x + rect.w > this.heapMinX + this.heapSize
+                    || rect.z + rect.h > this.heapMinZ + this.heapSize) {
+                throw new IllegalArgumentException("Saved rect out of heap bounds: " + rect);
+            }
+            for (Rect other : this.allocatedRects) {
+                if (other.intersects(rect)) {
+                    throw new IllegalArgumentException("Saved rect overlaps existing allocation: " + rect);
+                }
+            }
             this.occupy(rect);
         }
         this.coalesce();
@@ -76,32 +103,48 @@ public final class SubWorldAllocator {
         if (w <= 0 || h <= 0) {
             throw new IllegalArgumentException("Allocator request must be positive: " + w + "x" + h);
         }
-        Rect best = null;
+        Rect fit = null;
         for (Rect free : this.freeRects) {
             if (free.w >= w && free.h >= h) {
-                best = free;
+                fit = free;
                 break;
             }
         }
-        if (best == null) {
+        if (fit == null) {
             throw new IllegalStateException("Sub-world allocator is out of space");
         }
-        Rect alloc = new Rect(best.x, best.z, w, h);
-        this.freeRects.remove(best);
-        if (best.w > w) {
-            this.freeRects.add(new Rect(best.x + w, best.z, best.w - w, best.h));
+        Rect alloc = new Rect(fit.x, fit.z, w, h);
+        this.freeRects.remove(fit);
+        if (fit.w > w) {
+            this.freeRects.add(new Rect(fit.x + w, fit.z, fit.w - w, fit.h));
         }
-        if (best.h > h) {
-            this.freeRects.add(new Rect(best.x, best.z + h, w, best.h - h));
+        if (fit.h > h) {
+            this.freeRects.add(new Rect(fit.x, fit.z + h, w, fit.h - h));
         }
         this.allocatedRects.add(alloc);
+        this.coalesce();
         return alloc;
     }
 
     public void free(Rect rect) {
-        this.allocatedRects.remove(rect);
+        if (!this.allocatedRects.remove(rect)) {
+            throw new IllegalArgumentException("Rect is not allocated: " + rect);
+        }
         this.freeRects.add(rect.copy());
         this.coalesce();
+    }
+
+    public boolean freeOwned(Rect rect) {
+        for (int i = 0; i < this.allocatedRects.size(); i++) {
+            Rect owned = this.allocatedRects.get(i);
+            if (owned.x == rect.x && owned.z == rect.z && owned.w == rect.w && owned.h == rect.h) {
+                this.allocatedRects.remove(i);
+                this.freeRects.add(rect.copy());
+                this.coalesce();
+                return true;
+            }
+        }
+        return false;
     }
 
     public Rect extendInPlace(Rect rect, int targetW, int targetH) {
@@ -133,7 +176,11 @@ public final class SubWorldAllocator {
         int targetW = Math.max(neededW, Math.max(rect.w * 2, 1));
         int targetH = Math.max(neededH, Math.max(rect.h * 2, 1));
         Rect extended = this.extendInPlace(rect, targetW, targetH);
-        return extended != null ? extended : this.allocate(targetW, targetH);
+        if (extended != null) {
+            return extended;
+        }
+        this.freeOwned(rect);
+        return this.allocate(targetW, targetH);
     }
 
     private void carve(Rect cut) {
