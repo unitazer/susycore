@@ -8,7 +8,7 @@ use rapier3d::parry::query::details::NormalConstraints;
 use rapier3d::parry::query::{
   ClosestPoints, Contact, ContactManifold, ContactManifoldsWorkspace, DefaultQueryDispatcher,
   NonlinearRigidMotion, PersistentQueryDispatcher, QueryDispatcher, ShapeCastHit, ShapeCastOptions,
-  Unsupported,
+  TypedWorkspaceData, Unsupported, WorkspaceData,
 };
 use rapier3d::prelude::{ContactData, ContactManifoldData, Cuboid, Pose, Shape, ShapeType};
 use rapier3d::utils::PoseOps;
@@ -16,6 +16,17 @@ use rapier3d::utils::PoseOps;
 use crate::block_collisions::{BlockColliderInfoHandle, COLLIDERS};
 use crate::chunklet::Chunklet;
 use crate::{IVec3, Real};
+
+struct ChunkletWorkspace;
+
+impl WorkspaceData for ChunkletWorkspace {
+  fn as_typed_workspace_data(&self) -> TypedWorkspaceData<'_> {
+    TypedWorkspaceData::Custom
+  }
+  fn clone_dyn(&self) -> Box<dyn WorkspaceData> {
+    Box::new(Self)
+  }
+}
 
 pub struct ChunkletDispatcher;
 impl QueryDispatcher for ChunkletDispatcher {
@@ -92,11 +103,13 @@ impl PersistentQueryDispatcher<ContactManifoldData, ContactData> for ChunkletDis
     g2: &dyn Shape,
     prediction: f32,
     manifolds: &mut Vec<ContactManifold<ContactManifoldData, ContactData>>,
-    _workspace: &mut Option<ContactManifoldsWorkspace>,
+    workspace: &mut Option<ContactManifoldsWorkspace>,
   ) -> Result<(), Unsupported> {
     if g1.shape_type() != ShapeType::Custom && g2.shape_type() != ShapeType::Custom {
       return Err(Unsupported);
-    } else if g1.shape_type() == ShapeType::Custom && g2.shape_type() != ShapeType::Custom {
+    }
+    *workspace = Some(ChunkletWorkspace.into());
+    if g1.shape_type() == ShapeType::Custom && g2.shape_type() != ShapeType::Custom {
       manifolds_chunklet_shape(
         pos12,
         (g1 as &dyn Any)
@@ -108,7 +121,6 @@ impl PersistentQueryDispatcher<ContactManifoldData, ContactData> for ChunkletDis
         false,
       );
     } else if g1.shape_type() != ShapeType::Custom && g2.shape_type() == ShapeType::Custom {
-      let _now = Instant::now();
       manifolds_chunklet_shape(
         &pos12.inverse(),
         (g2 as &dyn Any)
@@ -119,7 +131,6 @@ impl PersistentQueryDispatcher<ContactManifoldData, ContactData> for ChunkletDis
         manifolds,
         true,
       );
-      // log::info!("manifolds took {:?}", now.elapsed());
     } else {
       todo!("g1:{:?}, g2:{:?}", g1.shape_type(), g2.shape_type());
     }
@@ -229,11 +240,4 @@ fn manifolds_chunklet_shape(
   for m in &mut manifolds[manifold_index..] {
     m.points.clear();
   }
-  // log::info!(
-  //   "{} manifolds area covered: {:?} -> {:?} ({} blocks)",
-  //   manifolds.len(),
-  //   mins,
-  //   maxs,
-  //   (maxs - mins).product()
-  // );
 }
