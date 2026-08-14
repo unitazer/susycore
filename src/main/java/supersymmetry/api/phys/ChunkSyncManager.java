@@ -111,9 +111,17 @@ public class ChunkSyncManager {
                     for (int sy = minCY; sy <= maxCY; sy++) {
                         long k = key(cx, sy, cz);
                         Ticket existing = tickets.get(k);
-                        if (existing != null) {
-                            existing.lastInhabitedTick = gameTime;
-                            continue;
+                        if (existing != null && sy < chunk.storageArrays.length) {
+                            ExtendedBlockStorage storage = chunk.storageArrays[sy];
+                            if (storage != null) {
+                                CachedSubchunk cachedSub = cached.get(k);
+                                if (cachedSub != null && cachedSub.storage == storage) {
+                                    existing.lastInhabitedTick = gameTime;
+                                    continue;
+                                }
+                            }
+                            Rapier.removeChunk(worldId, existing.x, existing.y, existing.z);
+                            tickets.remove(k);
                         }
                         if (sy >= chunk.storageArrays.length) continue;
                         ExtendedBlockStorage storage = chunk.storageArrays[sy];
@@ -160,13 +168,15 @@ public class ChunkSyncManager {
             int pcz = pz >> 4;
             long pk = key(pcx, pcy, pcz);
 
+            CachedSubchunk cachedSub = cached.get(pk);
+            if (cachedSub == null && !tickets.containsKey(pk)) continue;
+
             int lx = px & 0xF;
             int ly = py & 0xF;
             int lz = pz & 0xF;
             tmpPos.setPos(px, py, pz);
             int handle = Rapier.computeBlockColliderHandle(world, tmpPos, aabbTmp, tmpPos);
 
-            CachedSubchunk cachedSub = cached.get(pk);
             if (cachedSub != null) {
                 Chunk c = world.getChunkProvider().getLoadedChunk(pcx, pcz);
                 if (c != null && pcy < c.storageArrays.length && cachedSub.storage == c.storageArrays[pcy]) {

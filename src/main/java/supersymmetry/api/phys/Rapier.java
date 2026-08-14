@@ -122,7 +122,7 @@ public class Rapier {
                                                      PooledMutableBlockPos pos) {
         int[] stateIds = new int[4096];
         try {
-           BlockStateContainer container = subchunk.getData();
+            BlockStateContainer container = subchunk.getData();
             BlockStateContainerAccessor accessor = (BlockStateContainerAccessor) container;
             for (int i = 0; i < 4096; i++) {
                 IBlockState s = accessor.getPalette().getBlockState(accessor.getStorage().getAt(i));
