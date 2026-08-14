@@ -75,9 +75,8 @@ public final class SubWorldAllocator {
         this.allocatedRects.clear();
         this.freeRects.add(new Rect(this.heapMinX, this.heapMinZ, this.heapSize, this.heapSize));
         for (Rect rect : allocated) {
-            if (rect.x < this.heapMinX || rect.z < this.heapMinZ
-                    || rect.x + rect.w > this.heapMinX + this.heapSize
-                    || rect.z + rect.h > this.heapMinZ + this.heapSize) {
+            if (rect.x < this.heapMinX || rect.z < this.heapMinZ || rect.x + rect.w > this.heapMinX + this.heapSize ||
+                    rect.z + rect.h > this.heapMinZ + this.heapSize) {
                 throw new IllegalArgumentException("Saved rect out of heap bounds: " + rect);
             }
             for (Rect other : this.allocatedRects) {

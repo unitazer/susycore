@@ -29,11 +29,28 @@ public class ChunkSyncManager {
         }
     }
 
+    private static final class CachedSubchunk {
+
+        final ExtendedBlockStorage storage;
+        final int[] handles;
+
+        CachedSubchunk(ExtendedBlockStorage storage, int[] handles) {
+            this.storage = storage;
+            this.handles = handles;
+        }
+    }
+
     private static List<AxisAlignedBB> aabbTmp = new ArrayList<>();
 
     private static final int STALE_TICK_TIMEOUT = 80;
+    private static final int MAX_CACHED_SUBCHUNKS = 1024;
+
+    private static final int[][] BLOCK_CHANGE_OFFSETS = new int[][] {
+            { 0, 0, 0 }, { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 }
+    };
 
     private final Long2ObjectOpenHashMap<Ticket> tickets = new Long2ObjectOpenHashMap<>();
+    private final Long2ObjectOpenHashMap<CachedSubchunk> cached = new Long2ObjectOpenHashMap<>();
     private final WorldServer world;
 
     public ChunkSyncManager(WorldServer world) {
@@ -53,27 +70,14 @@ public class ChunkSyncManager {
         }
         int worldId = worldIdObj;
 
-        long startRem = System.nanoTime();
         var it = tickets.long2ObjectEntrySet().fastIterator();
-        int removed = 0;
         while (it.hasNext()) {
             Ticket t = it.next().getValue();
             if (t.lastInhabitedTick < gameTime - STALE_TICK_TIMEOUT || !isSubchunkLoaded(t.x, t.y, t.z)) {
                 Rapier.removeChunk(worldId, t.x, t.y, t.z);
                 it.remove();
-                removed++;
             }
         }
-        if (removed > 0) {
-            SusyLog.logger.info(
-                    "removed {} stale subchunks ({} total tracked, removalMs={})",
-                    removed,
-                    tickets.size(),
-                    String.format("%.3f", (System.nanoTime() - startRem) / 1_000_000.0));
-        }
-
-        long tickOverlap = System.nanoTime();
-        // int added = 0;
 
         PooledMutableBlockPos pos = PooledMutableBlockPos.retain();
         List<AbstractPhysicsEntity> ents = Rapier.entities;
@@ -102,11 +106,8 @@ public class ChunkSyncManager {
             }
             for (int cx = minCX; cx <= maxCX; cx++) {
                 for (int cz = minCZ; cz <= maxCZ; cz++) {
-                    // long chunkStart = System.nanoTime();
-                    if (!world.isBlockLoaded(new BlockPos(cx << 4, 64, cz << 4))) continue;
-                    Chunk chunk = world.getChunk(cx, cz);
-                    if (!chunk.isLoaded()) continue;
-                    // int subchunkAdded = 0;
+                    Chunk chunk = world.getChunkProvider().getLoadedChunk(cx, cz);
+                    if (chunk == null || !chunk.isLoaded()) continue;
                     for (int sy = minCY; sy <= maxCY; sy++) {
                         long k = key(cx, sy, cz);
                         Ticket existing = tickets.get(k);
@@ -114,10 +115,20 @@ public class ChunkSyncManager {
                             existing.lastInhabitedTick = gameTime;
                             continue;
                         }
-                        if (sy < 0 || sy >= chunk.storageArrays.length) continue;
+                        if (sy >= chunk.storageArrays.length) continue;
                         ExtendedBlockStorage storage = chunk.storageArrays[sy];
                         if (storage == null || storage.isEmpty()) continue;
-                        Rapier.handleSubchunkAddition(world, chunk, aabbTmp, pos, storage, sy, worldId);
+
+                        CachedSubchunk cachedSub = cached.get(k);
+                        if (cachedSub != null && cachedSub.storage == storage) {
+                            Rapier.addCachedSubchunk(worldId, cx, sy, cz, cachedSub.handles);
+                        } else {
+                            int[] handles = Rapier.handleSubchunkAddition(world, chunk, aabbTmp, pos, storage, sy,
+                                    worldId);
+                            if (handles != null) {
+                                putCache(k, new CachedSubchunk(storage, handles));
+                            }
+                        }
                         tickets.put(k, new Ticket(cx, sy, cz, gameTime));
                     }
                 }
@@ -126,46 +137,55 @@ public class ChunkSyncManager {
         pos.release();
     }
 
+    private void putCache(long k, CachedSubchunk cachedSub) {
+        if (cached.size() >= MAX_CACHED_SUBCHUNKS) {
+            cached.clear();
+        }
+        cached.put(k, cachedSub);
+    }
+
     public void handleBlockChange(BlockPos pos) {
         Integer worldIdObj = Rapier.initializedWorlds.get(world);
         if (worldIdObj == null) return;
         int worldId = worldIdObj;
 
-        int cx = pos.getX() >> 4;
-        int cy = pos.getY() >> 4;
-        int cz = pos.getZ() >> 4;
-        long k = key(cx, cy, cz);
-        if (!tickets.containsKey(k)) return;
-
-        BlockPos[] positions = new BlockPos[] {
-                pos, pos.east(), pos.west(), pos.up(), pos.down(), pos.south(), pos.north()
-        };
-
         PooledMutableBlockPos tmpPos = PooledMutableBlockPos.retain();
-        for (BlockPos p : positions) {
-            int pcx = p.getX() >> 4;
-            int pcy = p.getY() >> 4;
-            int pcz = p.getZ() >> 4;
+        for (int[] offset : BLOCK_CHANGE_OFFSETS) {
+            int px = pos.getX() + offset[0];
+            int py = pos.getY() + offset[1];
+            int pz = pos.getZ() + offset[2];
+            int pcy = py >> 4;
             if (pcy < 0 || pcy > 15) continue;
+            int pcx = px >> 4;
+            int pcz = pz >> 4;
             long pk = key(pcx, pcy, pcz);
-            if (!tickets.containsKey(pk)) continue;
 
-            int lx = p.getX() & 0xF;
-            int ly = p.getY() & 0xF;
-            int lz = p.getZ() & 0xF;
-            int handle = Rapier.computeBlockColliderHandle(world, p, aabbTmp, tmpPos);
-            Rapier.partialSubchunkUpdate(worldId, pcx, pcz, pcy, lx, ly, lz, handle);
+            int lx = px & 0xF;
+            int ly = py & 0xF;
+            int lz = pz & 0xF;
+            tmpPos.setPos(px, py, pz);
+            int handle = Rapier.computeBlockColliderHandle(world, tmpPos, aabbTmp, tmpPos);
+
+            CachedSubchunk cachedSub = cached.get(pk);
+            if (cachedSub != null) {
+                Chunk c = world.getChunkProvider().getLoadedChunk(pcx, pcz);
+                if (c != null && pcy < c.storageArrays.length && cachedSub.storage == c.storageArrays[pcy]) {
+                    cachedSub.handles[ly << 8 | lz << 4 | lx] = handle;
+                }
+            }
+
+            if (tickets.containsKey(pk)) {
+                Rapier.partialSubchunkUpdate(worldId, pcx, pcz, pcy, lx, ly, lz, handle);
+            }
         }
         tmpPos.release();
     }
 
     private boolean isSubchunkLoaded(int x, int y, int z) {
-        if (!world.isBlockLoaded(new BlockPos(x << 4, y << 4, z << 4))) return false;
-        Chunk chunk = world.getChunk(x, z);
-        if (chunk == null) return false;
-        return y < 0 || y >= chunk.storageArrays.length;
-        // if (y < 0 || y >= chunk.storageArrays.length) return false;
-        // ExtendedBlockStorage storage = chunk.storageArrays[y];
-        // return storage != null && !storage.isEmpty();
+        Chunk chunk = world.getChunkProvider().getLoadedChunk(x, z);
+        if (chunk == null || !chunk.isLoaded()) return false;
+        if (y < 0 || y >= chunk.storageArrays.length) return false;
+        ExtendedBlockStorage storage = chunk.storageArrays[y];
+        return storage != null && !storage.isEmpty();
     }
 }

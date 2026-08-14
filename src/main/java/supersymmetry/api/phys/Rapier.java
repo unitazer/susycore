@@ -14,6 +14,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.BlockPos.PooledMutableBlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
+import net.minecraft.world.chunk.BlockStateContainer;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
@@ -21,6 +22,7 @@ import com.mojang.realmsclient.util.Pair;
 
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import supersymmetry.api.SusyLog;
+import supersymmetry.mixins.minecraft.BlockStateContainerAccessor;
 
 public class Rapier {
 
@@ -28,6 +30,10 @@ public class Rapier {
     // ideally this would hash the coords aswell but thats probably too much
     // doesnt work well with TE's
     static Object2IntOpenHashMap<IBlockState> blockStateCache = new Object2IntOpenHashMap<>();
+    // stateId -> handle, indexed by Block.getStateId; -1 = uncomputed, 0 = no collider
+    private static int[] stateIdHandles = new int[0];
+    // stateId -> full solid flag; 0 = unknown, 1 = yes, 2 = no
+    private static byte[] stateIdFullSolid = new byte[0];
     public static HashMap<World, Integer> initializedWorlds = new HashMap<>();
     private static final AxisAlignedBB CHUNK_BOX = new AxisAlignedBB(
             -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE,
@@ -56,6 +62,8 @@ public class Rapier {
             if (initializedWorlds.isEmpty()) {
                 reset();
                 blockStateCache.clear();
+                stateIdHandles = new int[0];
+                stateIdFullSolid = new byte[0];
                 entities.clear();
             }
         }
@@ -84,32 +92,148 @@ public class Rapier {
                 String.format("handleChunkAddition took %.3f ms", (endTime - startTime) / 1000000f));
     }
 
-    public static void handleSubchunkAddition(
-                                              World world,
-                                              Chunk chunk,
-                                              List<AxisAlignedBB> aabb_tmp,
-                                              PooledMutableBlockPos pos,
-                                              ExtendedBlockStorage subchunk,
-                                              int yLevel,
-                                              int world_id) {
-        int[] subchunkColliderInfo = new int[4096];
+    // returns the computed handle array so callers can cache it, or null if the subchunk
+    // produces no colliders at all
+    public static int[] handleSubchunkAddition(
+                                               World world,
+                                               Chunk chunk,
+                                               List<AxisAlignedBB> aabb_tmp,
+                                               PooledMutableBlockPos pos,
+                                               ExtendedBlockStorage subchunk,
+                                               int yLevel,
+                                               int world_id) {
+        if (subchunk == null || subchunk.isEmpty()) return null;
+        int[] subchunkColliderInfo = computeSubchunkColliderInfo(world, chunk, subchunk, aabb_tmp, pos);
+        if (subchunkColliderInfo == null) return null;
+        addChunk(world_id, chunk.x, yLevel, chunk.z, subchunkColliderInfo);
+        return subchunkColliderInfo;
+    }
 
-        if (subchunk != null && !subchunk.isEmpty()) {
-            int chunkBaseX = chunk.x * 16;
-            int chunkBaseZ = chunk.z * 16;
-            int chunkBaseY = subchunk.getYLocation();
-            for (int ly = 0; ly < 16; ly++) {
-                for (int lz = 0; lz < 16; lz++) {
-                    for (int lx = 0; lx < 16; lx++) {
-                        pos.setPos(chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz);
-                        int handle = computeBlockColliderHandle(world, pos, aabb_tmp, pos);
-                        int index = ly << 8 | lz << 4 | lx;
-                        subchunkColliderInfo[index] = handle;
-                    }
+    public static void addCachedSubchunk(int world_id, int x, int yLevel, int z, int[] data) {
+        if (data == null) return;
+        addChunk(world_id, x, yLevel, z, data);
+    }
+
+    private static int[] computeSubchunkColliderInfo(
+                                                     World world,
+                                                     Chunk chunk,
+                                                     ExtendedBlockStorage subchunk,
+                                                     List<AxisAlignedBB> aabbTmp,
+                                                     PooledMutableBlockPos pos) {
+        int[] stateIds = new int[4096];
+        try {
+           BlockStateContainer container = subchunk.getData();
+            BlockStateContainerAccessor accessor = (BlockStateContainerAccessor) container;
+            for (int i = 0; i < 4096; i++) {
+                IBlockState s = accessor.getPalette().getBlockState(accessor.getStorage().getAt(i));
+                stateIds[i] = s == null ? 0 : Block.getStateId(s);
+            }
+        } catch (Throwable t) {
+            return computeSubchunkColliderInfoSlow(world, chunk, subchunk, aabbTmp, pos);
+        }
+
+        int[] handles = new int[4096];
+        int chunkBaseX = chunk.x * 16;
+        int chunkBaseZ = chunk.z * 16;
+        int chunkBaseY = subchunk.getYLocation();
+        int count = 0;
+        for (int i = 0; i < 4096; i++) {
+            int stateId = stateIds[i];
+            if (stateId == 0) continue;
+            int lx = i & 0xF;
+            int lz = (i >> 4) & 0xF;
+            int ly = (i >> 8) & 0xF;
+            pos.setPos(chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz);
+            int handle = handleForStateId(stateId, world, pos, chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz,
+                    aabbTmp);
+            if (handle == 0) continue;
+            if (isOccluded(stateIds, world, pos, lx, ly, lz)) continue;
+            handles[i] = handle;
+            count++;
+        }
+        return count == 0 ? null : handles;
+    }
+
+    private static int[] computeSubchunkColliderInfoSlow(
+                                                         World world,
+                                                         Chunk chunk,
+                                                         ExtendedBlockStorage subchunk,
+                                                         List<AxisAlignedBB> aabbTmp,
+                                                         PooledMutableBlockPos pos) {
+        int[] handles = new int[4096];
+        int chunkBaseX = chunk.x * 16;
+        int chunkBaseZ = chunk.z * 16;
+        int chunkBaseY = subchunk.getYLocation();
+        int count = 0;
+        for (int ly = 0; ly < 16; ly++) {
+            for (int lz = 0; lz < 16; lz++) {
+                for (int lx = 0; lx < 16; lx++) {
+                    pos.setPos(chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz);
+                    int handle = computeBlockColliderHandle(world, pos, aabbTmp, pos);
+                    int index = ly << 8 | lz << 4 | lx;
+                    handles[index] = handle;
+                    if (handle != 0) count++;
                 }
             }
         }
-        addChunk(world_id, chunk.x, yLevel, chunk.z, subchunkColliderInfo);
+        return count == 0 ? null : handles;
+    }
+
+    private static void ensureStateIdCaches(int stateId) {
+        int size = Math.max(stateId + 1, Block.BLOCK_STATE_IDS.size());
+        if (stateIdHandles.length >= size) return;
+        int[] nh = new int[size];
+        System.arraycopy(stateIdHandles, 0, nh, 0, stateIdHandles.length);
+        java.util.Arrays.fill(nh, stateIdHandles.length, size, -1);
+        stateIdHandles = nh;
+        byte[] nf = new byte[size];
+        System.arraycopy(stateIdFullSolid, 0, nf, 0, stateIdFullSolid.length);
+        stateIdFullSolid = nf;
+    }
+
+    private static int handleForStateId(int stateId, World world, PooledMutableBlockPos pos, int bx, int by, int bz,
+                                        List<AxisAlignedBB> aabbTmp) {
+        ensureStateIdCaches(stateId);
+        int cached = stateIdHandles[stateId];
+        if (cached >= 0) return cached;
+        IBlockState state = Block.getStateById(stateId);
+        int handle = computeHandleNoOcclusion(world, pos, bx, by, bz, state, aabbTmp);
+        stateIdHandles[stateId] = handle;
+        return handle;
+    }
+
+    private static boolean isFullSolidStateId(int stateId) {
+        ensureStateIdCaches(stateId);
+        byte f = stateIdFullSolid[stateId];
+        if (f == 0) {
+            IBlockState state = Block.getStateById(stateId);
+            boolean full = state.isFullBlock() && state.isFullCube() && state.isOpaqueCube();
+            f = (byte) (full ? 1 : 2);
+            stateIdFullSolid[stateId] = f;
+        }
+        return f == 1;
+    }
+
+    private static boolean isOccluded(int[] stateIds, World world, PooledMutableBlockPos pos, int lx, int ly, int lz) {
+        return fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, -1, 0, 0) &&
+                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 1, 0, 0) &&
+                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, -1, 0) &&
+                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, 1, 0) &&
+                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, 0, -1) &&
+                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, 0, 1);
+    }
+
+    private static boolean fullSolidNeighbor(int[] stateIds, World world, PooledMutableBlockPos pos, int lx, int ly,
+                                             int lz,
+                                             int dx, int dy, int dz) {
+        int nx = lx + dx;
+        int ny = ly + dy;
+        int nz = lz + dz;
+        if (nx < 0 || nx > 15 || ny < 0 || ny > 15 || nz < 0 || nz > 15) {
+            pos.setPos(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
+            return isFullSolidStateId(Block.getStateId(world.getBlockState(pos)));
+        }
+        return isFullSolidStateId(stateIds[ny << 8 | nz << 4 | nx]);
     }
 
     public static void add_force_debug(
@@ -216,21 +340,26 @@ public class Rapier {
     public static int computeBlockColliderHandle(World world, BlockPos pos, List<AxisAlignedBB> aabbTmp,
                                                  PooledMutableBlockPos tmpPos) {
         IBlockState state = world.getBlockState(pos);
+        tmpPos.setPos(pos.getX(), pos.getY(), pos.getZ());
+        if (isOccluded(world, tmpPos)) return 0;
+        return computeHandleNoOcclusion(world, tmpPos, pos.getX(), pos.getY(), pos.getZ(), state, aabbTmp);
+    }
+
+    private static int computeHandleNoOcclusion(World world, PooledMutableBlockPos pos, int bx, int by, int bz,
+                                                IBlockState state, List<AxisAlignedBB> aabbTmp) {
         Block block = state.getBlock();
         if (block == Blocks.AIR) return 0;
-        tmpPos.setPos(pos.getX(), pos.getY(), pos.getZ());
-        if (block.isPassable(world, tmpPos)) return 0;
+        pos.setPos(bx, by, bz);
+        if (block.isPassable(world, pos)) return 0;
         if (state.getMaterial() == Material.WATER || state.getMaterial() == Material.LAVA) return 0;
-        // TODO maybe do this on the rust side?
-        if (isOccluded(world, tmpPos)) return 0;
 
         int cached = blockStateCache.getInt(state);
         if (cached != 0 || blockStateCache.containsKey(state)) {
             return cached;
         }
-        float friction = Math.max(Math.min(1f - block.getSlipperiness(state, world, tmpPos, null), 0), 1);
+        float friction = Math.max(Math.min(1f - block.getSlipperiness(state, world, pos, null), 0), 1);
         aabbTmp.clear();
-        state.addCollisionBoxToList(world, tmpPos, CHUNK_BOX, aabbTmp, null, true);
+        state.addCollisionBoxToList(world, pos, CHUNK_BOX, aabbTmp, null, true);
         int size = aabbTmp.size();
         int handle;
         if (size == 0) {
@@ -240,12 +369,12 @@ public class Rapier {
             for (int j = 0; j < size; j++) {
                 AxisAlignedBB box = aabbTmp.get(j);
                 int j0 = j * 6;
-                boxData[j0] = box.minX - pos.getX();
-                boxData[j0 + 1] = box.minY - pos.getY();
-                boxData[j0 + 2] = box.minZ - pos.getZ();
-                boxData[j0 + 3] = box.maxX - pos.getX();
-                boxData[j0 + 4] = box.maxY - pos.getY();
-                boxData[j0 + 5] = box.maxZ - pos.getZ();
+                boxData[j0] = box.minX - bx;
+                boxData[j0 + 1] = box.minY - by;
+                boxData[j0 + 2] = box.minZ - bz;
+                boxData[j0 + 3] = box.maxX - bx;
+                boxData[j0 + 4] = box.maxY - by;
+                boxData[j0 + 5] = box.maxZ - bz;
             }
             handle = addColliderInfo(friction, 0.9, 1000.0, boxData);
         }

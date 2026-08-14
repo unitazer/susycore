@@ -226,8 +226,8 @@ fn manifolds_chunklet_shape(
       }
     }
   });
-  if manifolds.len() > manifold_index {
-    manifolds.truncate(manifold_index);
+  for m in &mut manifolds[manifold_index..] {
+    m.points.clear();
   }
   // log::info!(
   //   "{} manifolds area covered: {:?} -> {:?} ({} blocks)",

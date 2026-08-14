@@ -21,7 +21,8 @@ mod imp {
       DebugRenderMode::COLLIDER_SHAPES
         | DebugRenderMode::RIGID_BODY_AXES
         | DebugRenderMode::IMPULSE_JOINTS
-        | DebugRenderMode::SOLVER_CONTACTS, // | DebugRenderMode::COLLIDER_AABBS
+        | DebugRenderMode::SOLVER_CONTACTS
+        | DebugRenderMode::COLLIDER_AABBS,
     ))
   });
   static BACKEND: LazyLock<Mutex<GlBackend>> = LazyLock::new(|| Mutex::new(GlBackend::new()));

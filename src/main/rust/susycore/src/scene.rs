@@ -97,6 +97,7 @@ impl Scene {
         num_solver_iterations: 5,
         max_ccd_substeps: 5,
         friction_model: FrictionModel::Simplified,
+        contact_clustering: false,
         ..Default::default()
       },
       narrow_phase: NarrowPhase::with_query_dispatcher(
