@@ -20,7 +20,6 @@ import net.minecraft.util.math.MathHelper;
 import gregtech.api.gui.GuiTextures;
 import gregtech.api.gui.IRenderContext;
 import gregtech.api.gui.Widget;
-import gregtech.api.items.metaitem.MetaItem;
 import gregtech.api.recipes.Recipe;
 import gregtech.api.util.Position;
 import gregtech.api.util.Size;
@@ -196,14 +195,11 @@ public class ItemCostWidget extends Widget {
         GlStateManager.popMatrix();
         RenderHelper.disableStandardItemLighting();
 
-        String item_name = I18n.format(stack.getTranslationKey() + ".name");
-        if (stack.getItem() instanceof MetaItem metaitem) {
-            item_name = I18n.format(metaitem.getTranslationKey(stack));
-        }
+        String itemName = stack.getDisplayName();
         GlStateManager.pushMatrix();
         GlStateManager.scale(HEIGHT_SCALE, HEIGHT_SCALE, HEIGHT_SCALE);
         FontRenderer fontRenderer = Minecraft.getMinecraft().fontRenderer;
-        fontRenderer.drawString(String.format("%s, x%d", item_name, stack.getCount()),
+        fontRenderer.drawString(String.format("%s, x%d", itemName, stack.getCount()),
                 (int) ((pos.x + HEIGHT_OFFSET + 6 / HEIGHT_SCALE) / HEIGHT_SCALE), (int) (pos.y / HEIGHT_SCALE),
                 TEXT_COLOR);
         GlStateManager.popMatrix();

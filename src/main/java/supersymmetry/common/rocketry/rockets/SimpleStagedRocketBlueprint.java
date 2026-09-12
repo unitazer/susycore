@@ -16,6 +16,7 @@ import supersymmetry.api.rocketry.fuels.RocketFuelEntry;
 import supersymmetry.api.rocketry.rockets.AbstractRocketBlueprint;
 import supersymmetry.api.rocketry.rockets.IAFSImprovable;
 import supersymmetry.api.rocketry.rockets.RocketStage;
+import supersymmetry.api.space.CelestialObjects;
 import supersymmetry.api.space.Planetoid;
 import supersymmetry.common.entities.EntityAbstractRocket;
 import supersymmetry.common.rocketry.SuccessCalculation;
@@ -29,6 +30,7 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
         ResourceLocation location;
         int stageCount = 0;
         public List<RocketStage> stages = new ArrayList<>();
+        boolean solidRocket = false;
 
         public Builder(String name) {
             this.name = name;
@@ -48,15 +50,26 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
             return this;
         }
 
+        public Builder solidRocket() {
+            this.solidRocket = true;
+            return this;
+        }
+
         public SimpleStagedRocketBlueprint build() {
             SimpleStagedRocketBlueprint blueprint = new SimpleStagedRocketBlueprint(name, location);
             blueprint.setStages(stages);
+            blueprint.solidRocket(solidRocket);
             assert blueprint.isFullBlueprint() : "full blueprint produced by the builder, thats not meant to happen :C";
             return blueprint;
         }
     }
 
+    private void solidRocket(boolean solidRocket) {
+        this.solidRocket = solidRocket;
+    }
+
     public long AFSimprovement = 0;
+    public boolean solidRocket = false;
 
     public SimpleStagedRocketBlueprint(String name, ResourceLocation entity) {
         super(name, entity);
@@ -89,6 +102,7 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
         NBTTagCompound instrumentList = new NBTTagCompound();
         this.getInstruments().forEach(instrumentList::setInteger);
         tag.setTag("instruments", instrumentList);
+        tag.setBoolean("solidRocket", solidRocket);
 
         return tag;
     }
@@ -119,6 +133,8 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
         }
         this.setName(tag.getString("name"));
         this.AFSimprovement = tag.getLong("AFSimprovement");
+        this.solidRocket = tag.getBoolean("solidRocket");
+
         return true;
     }
 
@@ -176,11 +192,12 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
     }
 
     // lobotomized version of the function below to only take in the blueprint
-    public SuccessCalculation.AFSStats calculateInitialSuccess(double gravity, RocketFuelEntry fuel,
-                                                               long augmentation) {
+    public SuccessCalculation.AFSStats calculateInitialSuccess(double gravity, double ambientPressure,
+                                                               RocketFuelEntry fuel, long augmentation) {
         double success = 1;
-        double weight = this.getMass() * gravity;
-        double thrust = this.getThrust(fuel, "engine");
+        double gravMult = gravity / SuSyValues.G0;
+        double weight = this.getMass() * gravMult;
+        double thrust = this.getThrust(fuel, "engine", ambientPressure);
         double thrustToWeightRatio = thrust / weight;
         if (thrustToWeightRatio < 1)
             success = 0;
@@ -207,13 +224,13 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
         double radialInstability = this.getTotalRadiusMismatch();
         success *= (1 - (0.02 * radialInstability * Math.exp(radialInstability / 10)));
 
-        double smallThrust = this.getThrust(fuel, "engine_small");
+        double smallThrust = this.getThrust(fuel, "engine_small", ambientPressure);
         success *= (1 - (0.2 * Math.exp(3 - smallThrust)));
 
-        if (thrust / smallThrust > 10) {
-            success *= (1 - (0.2 * Math.exp((thrust / smallThrust) - 10)));
+        if (thrust / smallThrust > 50) {
+            success *= (1 - (0.005 * ((thrust / smallThrust) - 50)));
         } else if (thrust / smallThrust < 3) {
-            success *= (1 - (0.5 * Math.exp(3 - (thrust / smallThrust))));
+            success *= (1 - (0.5 * (3 - (thrust / smallThrust))));
         }
         success *= this.getGuidanceMultiplier();
         success = Math.max(0, success);
@@ -222,7 +239,7 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
 
         return new SuccessCalculation.AFSStats(success, weight, fuel.getDensity() * this.getFuelVolume(),
                 velocitySpeedup, escapeVelocity, getMaximumCargoMass(fuel, escapeVelocity), radialInstability, thrust,
-                oblateness);
+                oblateness, smallThrust);
     }
 
     public SuccessCalculation.LaunchResult calculateSuccess(EntityAbstractRocket rocket, long augmentation) {
@@ -230,13 +247,17 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
         // Thrust to weight ratio
         double gravity = SuSyValues.G0;
         double escapeVelocity = 11186;
+        double ambientPressure = CelestialObjects.EARTH.getSurfacePressure();
         if (rocket.world.provider instanceof WorldProviderPlanet planet) {
             gravity = planet.getPlanet().gravity * SuSyValues.G0;
-            escapeVelocity = Planetoid.PLANETOIDS.inverse().get(rocket.world.provider.getDimension())
-                    .getEscapeVelocity();
+            Planetoid launchSite = Planetoid.PLANETOIDS.inverse().get(rocket.world.provider.getDimension());
+            escapeVelocity = launchSite.getEscapeVelocity();
+            ambientPressure = launchSite.getSurfacePressure();
         }
-        double weight = (this.getMass() + rocket.getCargoMass()) * gravity;
-        double thrust = this.getThrust(rocket.getFuel(), "engine");
+        double gravMult = gravity / SuSyValues.G0;
+
+        double weight = (this.getMass() + rocket.getCargoMass()) * gravMult;
+        double thrust = this.getThrust(rocket.getFuel(), "engine", ambientPressure);
         double thrustToWeightRatio = thrust / weight;
 
         if (thrustToWeightRatio < 1) {
@@ -262,7 +283,7 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
         success *= (1 - (0.02 * radialInstability * Math.exp(radialInstability / 10)));
 
         // Small engines shouldn't have that much throughput
-        double smallThrust = this.getThrust(rocket.getFuel(), "engine_small");
+        double smallThrust = this.getThrust(rocket.getFuel(), "engine_small", ambientPressure);
         double torqueNeeded = 1 + rocket.world.rainingStrength + rocket.world.thunderingStrength;
         success *= (1 - (0.2 * Math.exp(torqueNeeded - smallThrust)));
 
@@ -281,10 +302,15 @@ public class SimpleStagedRocketBlueprint extends AbstractRocketBlueprint impleme
         if (Math.random() < success) {
             return SuccessCalculation.LaunchResult.LAUNCHES;
         } else {
-            double engineActivity = this.getThrust(rocket.getFuel(), "engine") * this.getComponentCount("tank");
+            double engineActivity = thrust * this.getComponentCount("tank");
             double chanceExplosion = 1 - Math.exp(-engineActivity / 10000000);
             return Math.random() < chanceExplosion ? SuccessCalculation.LaunchResult.EXPLODES :
                     SuccessCalculation.LaunchResult.CRASHES;
         }
+    }
+
+    @Override
+    public boolean isSolidRocket() {
+        return solidRocket;
     }
 }

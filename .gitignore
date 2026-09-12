@@ -82,3 +82,8 @@ libs/optifine/
 # Claude instructions
 CLAUDE.md
 .clawdea/
+
+# nix flakes make these
+result
+result-*
+.direnv/

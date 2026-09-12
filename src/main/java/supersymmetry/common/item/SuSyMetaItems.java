@@ -147,14 +147,15 @@ public class SuSyMetaItems {
         CODE_BREACHER = metaItem.addItem(8, "code_breacher").setMaxStackSize(1);
         ENTITY_TAGGER = metaItem.addItem(9, "entity_tagger").setMaxStackSize(1);
 
-        FACTION_RADIO = metaItem.addItem(10, "faction_radio").setMaxStackSize(1);
+        FACTION_RADIO = metaItem.addItem(10, "faction_radio").setMaxStackSize(1)
+                .addComponents(new FactionRadioBehaviour());
 
         DATA_CARD = metaItem.addItem(11, "data_card").setMaxStackSize(1)
                 .addComponents(new TooltipBehavior(lines -> lines.add(I18n.format("metaitem.data_card.tooltip.1"))));
 
         DATA_CARD_ACTIVE = metaItem.addItem(12, "data_card.active").setMaxStackSize(1)
                 .addComponents(new DataCardBehavior(lines -> lines.add(I18n.format("metaitem.data_card.tooltip.1")),
-                        Arrays.asList("type")));
+                        Arrays.asList("name")));
 
         DATA_CARD_MASTER_BLUEPRINT = metaItem.addItem(13, "data_card.master_blueprint").setMaxStackSize(1)
                 .addComponents(new BlueprintBehavior(_ -> {}, Arrays.asList("name")));
@@ -193,6 +194,7 @@ public class SuSyMetaItems {
         for (int i = 0; i < EnumDyeColor.values().length; i++) {
             MetaItems.SPRAY_CAN_DYES[i].addComponents(new PipeNetPainterBehavior(512, SPRAY_EMPTY.getStackForm(), i));
         }
+        MetaItems.DUCT_TAPE.addComponents(new TapeRepairBehavior());
     }
 
     private static void addTieredOredictItem(OreDictValueItem[] items, int id, int RGB, OrePrefix prefix) {

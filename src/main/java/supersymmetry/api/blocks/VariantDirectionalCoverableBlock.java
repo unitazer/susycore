@@ -39,11 +39,6 @@ public class VariantDirectionalCoverableBlock<T extends Enum<T> & IStringSeriali
 
     public VariantDirectionalCoverableBlock(Material materialIn) {
         super(materialIn);
-        // this.setDefaultState(blockState.getBaseState().withProperty(VARIANT,
-        // VALUES[0]).withProperty(FACING,
-        // EnumFacing.SOUTH));
-        // CustomBlockRotations.registerCustomRotation(this,
-        // BLOCK_DIRECTIONAL_BEHAVIOR);
     }
 
     public Predicate<ItemStack> validCover;

@@ -17,7 +17,7 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.text.ITextComponent;
-import net.minecraft.util.text.TextComponentString;
+import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.util.text.TextFormatting;
 import net.minecraft.world.World;
 import net.minecraftforge.fluids.Fluid;
@@ -486,17 +486,17 @@ public class MetaTileEntityBlueprintAssembler extends MultiblockWithDisplayBase 
     protected void addErrorText(List<ITextComponent> textList) {
         super.addErrorText(textList);
         if (isStructureFormed() && !coolantFilled) {
-            ITextComponent msg = new TextComponentString("Coolant Not Filled");
+            ITextComponent msg = new TextComponentTranslation(this.getMetaName() + ".no_coolant");
             msg.getStyle().setColor(TextFormatting.RED);
             textList.add(msg);
         }
         if (buildInProgress && hasNotEnoughEnergy) {
-            ITextComponent msg = new TextComponentString(I18n.format(this.getMetaName() + ".no_energy_build"));
+            ITextComponent msg = new TextComponentTranslation(this.getMetaName() + ".no_energy_build");
             msg.getStyle().setColor(TextFormatting.YELLOW);
             textList.add(msg);
         }
         if (buildInProgress && buildHasNotEnoughCoolant) {
-            ITextComponent msg = new TextComponentString(I18n.format(this.getMetaName() + ".no_coolant_build"));
+            ITextComponent msg = new TextComponentTranslation(this.getMetaName() + ".no_coolant_build");
             msg.getStyle().setColor(TextFormatting.YELLOW);
             textList.add(msg);
         }
@@ -661,7 +661,7 @@ public class MetaTileEntityBlueprintAssembler extends MultiblockWithDisplayBase 
                 .where('T', states(MetaBlocks.TRANSPARENT_CASING.getState(BlockGlassCasing.CasingType.TEMPERED_GLASS)))
                 .where('F', fluid(SusyMaterials.FC75.getFluid()))
                 .where('I', abilities(MultiblockAbility.IMPORT_FLUIDS).setMaxGlobalLimited(1).setMinGlobalLimited(1, 1)
-                        .or(abilities(MultiblockAbility.EXPORT_FLUIDS).setMaxGlobalLimited(1).setMaxGlobalLimited(1, 1))
+                        .or(abilities(MultiblockAbility.EXPORT_FLUIDS).setMaxGlobalLimited(1).setMinGlobalLimited(1, 1))
                         .or(abilities(MultiblockAbility.INPUT_ENERGY).setMaxGlobalLimited(2).setMinGlobalLimited(1, 1)
                                 .or(states(getCasingState()))
                                 .or(maintenancePredicate().setMaxGlobalLimited(1).setMinGlobalLimited(1, 1)))
@@ -787,7 +787,7 @@ public class MetaTileEntityBlueprintAssembler extends MultiblockWithDisplayBase 
 
         ConditionalWidget conditional = new ConditionalWidget(0, 0, width, height, () -> !hasBlueprint());
         conditional.addWidget(new LabelWidget(width / 2 - 40, height / 2 - 29,
-                I18n.format(this.getMetaName() + ".blueprint_request"), 0x505050));
+                this.getMetaName() + ".blueprint_request", 0x505050));
         builder.widget(conditional);
 
         builder.widget(
@@ -813,7 +813,7 @@ public class MetaTileEntityBlueprintAssembler extends MultiblockWithDisplayBase 
         conditional.addWidgetWithTest(mainw, () -> !blueprintBuilt && hasBlueprint());
 
         conditional.addWidgetWithTest(new ClickButtonWidget(9, height - INV_HEIGHT - 30, 35, 25,
-                I18n.format(this.getMetaName() + ".build_button"), click -> {
+                this.getMetaName() + ".build_button", click -> {
                     if (!buildInProgress && hasBlueprint()) {
                         AbstractRocketBlueprint bp = getCurrentBlueprint();
                         if (bp != null) {

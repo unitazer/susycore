@@ -85,6 +85,8 @@ tile.rocket_turbopump.basic.name=Basic Rocket Turbopump
 tile.rocket_control.basic.name=Basic Rocket Control System
 tile.rocket_outer_hatch.al_2219.name=Al-2219 Rocket Hatch
 tile.rocket_tank_shell.al_2219.name=Al-2219 Tank Shell
+tile.rocket_tank_shell1.steel.name=Steel Tank Shell
+tile.solid_rocket_igniter.default.name=Solid-Fuel Rocket Igniter
 tile.rocket_interstage.al_7075.name=Al-7075 Rocket Interstage
 tile.rocket_fairing.al_7075.name=Al-7075 Payload Fairing Panel
 tile.rocket_nozzle.bell_basic.name=Bell Rocket Nozzle Shell
@@ -99,6 +101,7 @@ tile.rocket_nozzle.expanding.name=Expanding Rocket Nozzle Shell
 tile.rocket_fairing_connector.al_7075.name=Al-7075 Fairing Connector
 tile.guidance_system.soyuz.name=Soyuz 7K Guidance System
 tile.rocket_engine_gas_generator.open_cycle.name=Open Cycle Gas Generator
+
 
 tile.deposit_block.orthomagmatic.name=Orthomagmatic Deposit Block
 tile.deposit_block.metamorphic.name=Metamorphic Deposit Block
@@ -179,9 +182,15 @@ tile.robot_arm.grabber.name=Robotic Arm
 tile.robot_arm_layup.layup.name=Layup Machine Robotic Arm
 
 tile.susy_multiblock_casing.hardened_titanium_casing.name=Hardened Titanium Casing
+tile.susy_multiblock_casing2.light_stainless_casing.name=Light Lunar Stainless Steel Casing
 tile.vehicle_track.default.name=Heavy-Duty Vehicle Track
 tile.bwe_conveyor_belt.default.name=Heavy-Duty Hardened Titanium Conveyor Belt
 
+tile.solar_furnace_crucible.default.name=Solar Furnace Crucible
+tile.solar_furnace_redirecting_mirror.default.name=Solar Furnace Redirecting Mirror
+tile.epoxy_solar_furnace_mirror.epoxy.name=Lightweight Epoxy Solar Furnace Mirror
+tile.steel_solar_furnace_mirror.steel.name=Steel Solar Furnace Mirror
+tile.heliostat.default.name=Heliostat
 
 
 tile.crucible.silicon_carbide.name=Silicon Carbide Crucible
@@ -267,6 +276,7 @@ susy.material.lubricating_oil=Lubricating Oil
 susy.material.aluminium_alloy_7075=Aluminium Alloy 7075
 susy.material.aluminium_alloy_6061=Aluminium Alloy 6061
 susy.material.aluminium_alloy_mg_6=Aluminium Alloy Mg6
+susy.material.metallized_bopet=Metallized BoPET
 
 # Rock/Mineral Materials
 susy.material.fluorite=Fluorite
@@ -278,7 +288,7 @@ susy.material.limestone=Limestone
 susy.material.gneiss=Gneiss
 susy.material.kimberlite=Kimberlite
 susy.material.anorthosite=Anorthosite
-susy.material.kreep_basalt=KREEP Basalt
+susy.material.kreep_anorthosite=KREEP-Enriched Anorthosite
 susy.material.leucobasalt=Leucobasalt
 susy.material.muscovite=Muscovite
 susy.material.dolomite=Dolomite
@@ -346,6 +356,7 @@ susy.machine.aerospace_flight_simulator.gui.velocity_percent=Escape velocity%%: 
 susy.machine.aerospace_flight_simulator.gui.cargo_capacity=Cargo capacity: %s kg
 susy.machine.aerospace_flight_simulator.gui.radial_instability=Radial mismatch: %s blocks
 susy.machine.aerospace_flight_simulator.gui.thrust=Thrust: %s N
+susy.machine.aerospace_flight_simulator.gui.vernier_thrust=Vernier thrust: %s N
 susy.machine.aerospace_flight_simulator.gui.oblateness=Oblateness: %s
 susy.machine.aerospace_flight_simulator.gui.improvement=%s FLOPPAs applied
 
@@ -377,21 +388,28 @@ susy.machine.blueprint_assembler.build_button=Build
 susy.machine.blueprint_assembler.compiling=Compiling: %s%%
 susy.machine.blueprint_assembler.no_energy_build=Insufficient energy (MV minimum required)
 susy.machine.blueprint_assembler.no_coolant_build=Insufficient FC-75 coolant flow
+susy.machine.blueprint_assembler.no_coolant=No FC-75 coolant
 
+susy.machine.aerospace_flight_simulator.obstructed=No FC-75 coolant
+susy.machine.aerospace_flight_simulator.obstructed.desc=The AFS must be fully filled with coolant to begin normal operation.
 
 susy.rocketry.components.engine.name=Engine(s)
 susy.rocketry.components.engine_small.name=Vernier engine(s)
-susy.rocketry.components.tank.name=Tank(s)
+susy.rocketry.components.tank.name=Liquid tank(s)
 susy.rocketry.components.spacecraft.name=Spacecraft
 susy.rocketry.components.fairing.name=Fairing
 susy.rocketry.components.interstage.name=Interstage
+susy.rocketry.components.solid_tank.name=Solid fuel tank
 
 # Component tooltips
 susy.rocketry.tooltip.mass=Mass: %.1f kg
 susy.rocketry.tooltip.radius=Radius: %.1f
 susy.rocketry.tooltip.height=Height: %d
 susy.rocketry.tooltip.area_ratio=Area ratio: %.1f
-susy.rocketry.tooltip.throughput=Throughput: %.1f
+susy.rocketry.tooltip.throughput=Throughput: %.1f kg/s
+susy.rocketry.tooltip.chamber_pressure=Chamber pressure: %.1f MPa
+susy.rocketry.tooltip.exit_angle=Exit half-angle: %.1f°
+susy.rocketry.tooltip.contour_efficiency=Nozzle contour eff.: %.1f%%
 susy.rocketry.tooltip.volume=Volume: %.0f
 susy.rocketry.tooltip.life_supported=§bLife support available
 susy.rocketry.tooltip.life_not_supported=§cLife support unavailable
@@ -626,6 +644,9 @@ susy.machine.lunar_bucket_wheel_excavator.tooltip=World-Eater 9000
 
 susy.machine.cargo_drone_pad.name=Cargo Drone Pad
 susy.machine.cargo_drone_pad.tooltip=MarvNET v0.1
+
+susy.machine.solar_furnace.name=Solar Furnace
+susy.machine.solar_furnace.tooltip=The power of the sun in the palm of my hand! (my hand is large)
 
 # Properties
 susy.recipe.plasma_requirement=Requires plasma: %s
@@ -1273,6 +1294,8 @@ recipemap.attrition_scrubber.name=Attrition Scrubbing
 recipemap.edm.name=Electric Discharge Machining (EDM)
 recipemap.layup=Layup
 recipemap.lunar_bwe.name=Lunar Bucket Wheel Excavator
+recipemap.solar_furnace.name=Solar Furnace
+recipemap.evaporation_deposition.name=Evaporation Deposition
 
 strand_casting.name=Continuous Casting
 susy.multiblock.primitive_mud_pump.description=The Primitive Mud Pump is a Steam Era multiblock that collects mud once per second, but only if it is in a river biome, and when the controller is between Y = 64 and Y = 80 (Inclusive). It can use a Pump, ULV, or LV Output Hatch.
@@ -1366,7 +1389,6 @@ metaitem.orbital.scrap.earth.name=Earth Orbital Scrap
 metaitem.code_breacher.name=Code Breacher
 metaitem.air_disperser.name=Air Disperser
 metaitem.air_disperser.tooltip=Disperses Oxygen to Breathe (uses 100mB/s while filling)
-metaitem.shape.mold.target.name=Sputtering Target Mold
 metaitem.location_card.name=Location Card
 metaitem.cargo_drone.basic.name=Basic Cargo Drone
 metaitem.cargo_drone.basic.tooltip=Max range: §61000 blocks§7, speed: §b2.5 blocks/second§b
@@ -1386,6 +1408,11 @@ metaitem.tungsten_electrode.name=Thoriated Tungsten Electrode
 metaitem.shape.mold.target.name=Sputtering Target Mold
 metaitem.rocket_configurer.name=Rocket Configuration Tool
 metaitem.clay_graphite_crucible.name=Clay-Graphite Crucible
+metaitem.astronaut_helmet.name=Astronaut Helmet
+metaitem.astronaut_chestplate.name=Astronaut Chestplate
+metaitem.astronaut_leggings.name=Astronaut Leggings
+metaitem.astronaut_boots.name=Astronaut Boots
+
 
 # Catalysts
 susy.universal.catalysts.tooltip.tier=§eMax Voltage: §f%,d EU/t (%s§f)
@@ -1454,11 +1481,13 @@ metaitem.data_card.active.tooltip.1=Load this into a Rocket Assembler to build t
 metaitem.data_card.master_blueprint.name=Rocket Blueprint
 metaitem.data_card.master_blueprint.tag.soyuz=§6Soyuz
 metaitem.data_card.master_blueprint.tag.lunar=§6Lunar-sized Rocket
-metaitem.data_card.active.tag.engine=§6Engine
-metaitem.data_card.active.tag.engine_small=§6Vernier Engine
-metaitem.data_card.active.tag.fairing=§6Fairing
+chat.susy.rocket_blueprint.item_list=§bTotal item cost for this rocket:§b
+metaitem.data_card.active.tag.laval_engine=§6Laval Engine
+metaitem.data_card.active.tag.vernier_engine=§6Vernier Engine
+metaitem.data_card.active.tag.alu_fairing=§6Fairing
 metaitem.data_card.active.tag.spacecraft=§6Spacecraft
-metaitem.data_card.active.tag.tank=§6Tank
+metaitem.data_card.active.tag.fluid_tank=§6Liquid Fuel Tank
+metaitem.data_card.active.tag.solid_tank=§6Solid Fuel Tank
 metaitem.data_card.active.tag.interstage=§6Interstage
 
 # Machine Translations
@@ -1473,6 +1502,14 @@ susy.cargo_drone_pad.distance=§bDistance to target:§b %s blocks
 susy.cargo_drone_pad.initiated=§2Depositing item...§2
 susy.cargo_drone_pad.deposited=§aReturning...§a
 susy.cargo_drone_pad.progress=§b%s%%§b
+
+susy.multiblock.solar_furnace.num_heliostats=§6Currently Active Heliostats: §6%s
+susy.multiblock.solar_furnace.current_power=§cCurrent Power: §c%s §ckW§c
+susy.multiblock.solar_furnace.average_speed=§bAverage Speed over the last second:§b %sx
+susy.multiblock.solar_furnace.low_power=Insufficient power! You must construct additional heliostats.
+susy.top.solar_furnace.num_heliostats=Currently Active Heliostats:
+susy.top.solar_furnace.current_power=Current Power:
+susy.top.solar_furnace.average_speed=Average Speed:
 
 susy.location_card.tooltip.coords=§bStored coordinates: §b
 susy.location_card.tooltip.no_coords=No coordinates stored. Shift-right-click a Drone Deposit Basket to link
@@ -1546,6 +1583,7 @@ susy.recipe.biomeTypes=BiomeTypes: %s
 susy.recipe.biomeTypes_blocked=Blocked BiomeTypes: %s
 susy.recipe.atmosphere=Only functions in an atmosphere
 susy.recipe.vacuum=Only functions in a vacuum
+susy.recipe.solar_furnace_min_power=Minimum power to run recipe: %s W
 
 # Commands
 susy.command.horde.usage=/mobHorde <start/stop/status>
@@ -1815,6 +1853,7 @@ susy.msg.rocket_component.not_interstage=An block was used that is not an inters
 susy.msg.rocket_component.wrong_chamber_type=A different chamber should be used.
 susy.msg.rocket_component.match_wrong=The match is not within the nozzle.
 susy.msg.rocket_component.nozzle_too_short=The nozzle is not long enough!
+susy.msg.rocket_component.igniter_wrong=There is not exactly one igniter, or the igniter is not placed directly above the tank.
 
 entity.Rocket.name=Soyuz FG Rocket
 entity.Lander.name=Moon Lander

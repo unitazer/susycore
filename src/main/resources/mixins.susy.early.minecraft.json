@@ -27,6 +27,7 @@
     "RenderGlobalAccessor",
     "RenderGlobalMixin",
     "TileEntityMixin",
-    "TileEntityRendererDispatcherMixin"
+    "TileEntityRendererDispatcherMixin",
+    "WorldProviderSurfaceMixin"
   ]
 }

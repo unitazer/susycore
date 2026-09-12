@@ -1,6 +1,7 @@
 package supersymmetry.common;
 
 import static net.minecraftforge.common.BiomeDictionary.*;
+import static supersymmetry.common.blocks.SuSyBlocks.GOOG;
 import static supersymmetry.common.blocks.SuSyBlocks.REGOLITH;
 import static supersymmetry.common.blocks.SuSyBlocks.susyBlocks;
 import static supersymmetry.common.blocks.SuSyMetaBlocks.SHEETED_FRAMES;
@@ -167,6 +168,7 @@ public class CommonProxy {
             registry.register(b);
         }
         registry.register(REGOLITH);
+        registry.register(GOOG);
 
         SHEETED_FRAMES.values().stream().distinct().forEach(registry::register);
     }
@@ -180,6 +182,7 @@ public class CommonProxy {
             registry.register(createItemBlock(block, VariantItemBlock::new));
         susyBlocks.stream().distinct().forEach(vb -> registry.register(createItemBlock(vb, VariantItemBlock::new)));
         registry.register(createItemBlock(REGOLITH, VariantItemBlockFalling::new));
+        registry.register(createItemBlock(GOOG, ItemBlock::new));
         SHEETED_FRAMES.values().stream().distinct().map(block -> createItemBlock(block, SheetedFrameItemBlock::new))
                 .forEach(registry::register);
     }
@@ -278,7 +281,7 @@ public class CommonProxy {
         addTypes(SuSyBiomes.LUNAR_MARIA, Type.DEAD, Type.VOID, Type.NETHER);
 
         SuSyBiomes.LUNAR_KREEP_TERRANE = new BiomeLunarKreepTerrane(new Biome.BiomeProperties("Lunar KREEP Terrane")
-                .setRainDisabled().setBaseHeight(0f).setHeightVariation(0.2f).setRainfall(0).setTemperature(0.3f));
+                .setRainDisabled().setBaseHeight(2f).setHeightVariation(0.3f).setRainfall(0).setTemperature(0.3f));
         SuSyBiomes.LUNAR_KREEP_TERRANE.setRegistryName(Supersymmetry.MODID, "lunar_kreep_terrane");
         evt.getRegistry().register(SuSyBiomes.LUNAR_KREEP_TERRANE);
         addTypes(SuSyBiomes.LUNAR_KREEP_TERRANE, Type.DEAD, Type.VOID, Type.NETHER);

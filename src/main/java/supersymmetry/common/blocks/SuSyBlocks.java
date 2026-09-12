@@ -71,6 +71,7 @@ public class SuSyBlocks {
     public static BlocksS5BMRF S5BMRF;
     public static BlocksS6BMRF S6BMRF;
     public static BlocksRaidFlare BLOCKBANDITFLARE;
+    public static BlockGoog GOOG;
     public static BlockSpeaker SPEAKER;
     public static BlockCrucible CRUCIBLE;
 
@@ -92,6 +93,8 @@ public class SuSyBlocks {
     public static BlockFairingConnector FAIRING_CONNECTOR;
     public static BlockSpacecraftHull SPACECRAFT_HULL;
     public static BlockRocketEngineGasGenerator ROCKET_ENGINE_GAS_GENERATOR;
+    public static BlockIgniter BLOCK_IGNITER;
+
     public static BlockEccentricRoll ECCENTRIC_ROLL;
     public static BlockGrinderCasing GRINDER_CASING;
     public static BlockGirthGearTooth GIRTH_GEAR_TOOTH;
@@ -102,10 +105,13 @@ public class SuSyBlocks {
     public static BlockBWEConveyorBelt BWE_CONVEYOR_BELT;
     public static BlockSolarPanel SOLAR_PANEL;
     public static BlockPaddleShaft PADDLE_SHAFT;
-    public static BlockSolarFurnaceMirror SOLAR_FURNACE_MIRROR;
+    public static BlockEpoxySolarFurnaceMirror EPOXY_SOLAR_FURNACE_MIRROR;
+    public static BlockSteelSolarFurnaceMirror STEEL_SOLAR_FURNACE_MIRROR;
     public static BlockHeliostat HELIOSTAT;
-
+    public static BlockSolarFurnaceRedirectingMirror SOLAR_FURNACE_REDIRECTING_MIRROR;
+    public static BlockSolarFurnaceCrucible SOLAR_FURNACE_CRUCIBLE;
     public static BlockLunarConcrete LUNAR_CONCRETE;
+    public static BlockSuSyMultiblockCasing2 MULTIBLOCK_CASING_2;
 
     public static ArrayList<VariantBlock<?>> susyBlocks;
 
@@ -134,6 +140,9 @@ public class SuSyBlocks {
             }
         }
 
+        GOOG = new BlockGoog();
+        GOOG.setRegistryName("goog");
+
         REGOLITH = new BlockRegolith();
         REGOLITH.setRegistryName("regolith");
         registerWalkingSpeedBonus();
@@ -155,6 +164,7 @@ public class SuSyBlocks {
                 registerItemModel(b);
         });
         registerItemModel(REGOLITH);
+        registerItemModel(GOOG);
     }
 
     @SideOnly(Side.CLIENT)
