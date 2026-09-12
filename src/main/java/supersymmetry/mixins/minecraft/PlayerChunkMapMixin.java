@@ -3,7 +3,7 @@ package supersymmetry.mixins.minecraft;
 import java.util.Iterator;
 import java.util.List;
 
-import javax.annotation.Nullable;
+import org.jetbrains.annotations.Nullable;
 
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.server.management.PlayerChunkMap;

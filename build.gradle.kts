@@ -157,33 +157,73 @@ configurations {
     }
 }
 
-// # Rust native library integration (src/main/rust -> src/main/resources/natives/susycore)
-
+// Rust natives stuff
+// ai generated because i dont care
 data class RustTarget(
-    val triple: String,
-    val arch: String,
     val os: String,
+    val arch: String,
+    val triple: String,
+    // cargo frontend
+    val tool: String,
     val libExt: String,
     val libPrefix: String,
 ) {
+    val id: String
+        get() = "$os-$arch"
+    val libName: String
+        get() = "susycore_${arch}_${os}.$libExt"
     val releaseLibFile: File
         get() = File("src/main/rust/target/$triple/release/${libPrefix}susycore.$libExt")
 }
 
 val rustTargets = listOf(
-    RustTarget("x86_64-unknown-linux-gnu", "x86_64", "linux", "so", "lib"),
-    RustTarget("aarch64-unknown-linux-gnu", "aarch64", "linux", "so", "lib"),
+    RustTarget("linux", "x86_64", "x86_64-unknown-linux-gnu", "cargo", "so", "lib"),
+    RustTarget("linux", "aarch64", "aarch64-unknown-linux-gnu", "zigbuild", "so", "lib"),
+    RustTarget("windows", "x86_64", "x86_64-pc-windows-msvc", "xwin", "dll", ""),
+    RustTarget("windows", "aarch64", "aarch64-pc-windows-msvc", "xwin", "dll", ""),
+    RustTarget("macos", "x86_64", "x86_64-apple-darwin", "zigbuild", "dylib", "lib"),
+    RustTarget("macos", "aarch64", "aarch64-apple-darwin", "zigbuild", "dylib", "lib"),
 )
 
-val isWindows = System.getProperty("os.name").lowercase().contains("windows")
-val devOs = if (isWindows) "windows" else "linux"
-val devArch = "x86_64"
-val devLibExt = if (isWindows) "dll" else "so"
-val devLibPrefix = if (isWindows) "" else "lib"
-val devLibFile = File("src/main/rust/target/debug/${devLibPrefix}susycore.$devLibExt")
+val hostOs = when {
+    System.getProperty("os.name").lowercase().contains("windows") -> "windows"
+    System.getProperty("os.name").lowercase().contains("mac") -> "macos"
+    else -> "linux"
+}
+val hostArch = when (System.getProperty("os.arch")) {
+    "aarch64", "arm64" -> "aarch64"
+    else -> "x86_64"
+}
+val hostTarget = rustTargets.first { it.os == hostOs && it.arch == hostArch }
+
+fun stringSelection(prop: String, env: String): String? =
+    (findProperty(prop) as String?) ?: providers.environmentVariable(env).orNull
+
+fun String?.flag(): Boolean = this != null && this != "false" && this != "0"
+fun String?.flagOr(default: Boolean): Boolean = if (this == null) default else flag()
+
+val useDocker = stringSelection("rustDocker", "RUST_DOCKER").flagOr(default = true)
+val rustTargetsToBuild: List<RustTarget> = when (val requested = stringSelection("rustTargets", "RUST_TARGETS")) {
+    null -> listOf(hostTarget)
+    else -> {
+        val ids = requested.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        when {
+            "all" in ids -> rustTargets
+            else -> ids.map { id ->
+                rustTargets.find { it.id == id || it == hostTarget && id == "host" }
+                    ?: throw GradleException(
+                        "Unknown rust target \"$id\". Available: ${rustTargets.map { it.id }}, host, all"
+                    )
+            }.distinct()
+        }
+    }
+}
+// targets that may actually be compiled on this machine
+val rustBuildableTargets = rustTargetsToBuild.filter { it == hostTarget || useDocker }
 
 val rustProjectDir = file("src/main/rust")
 val rustSourcesDir = file("src/main/rust/susycore/src")
+val nativesDir = file("src/main/resources/natives/susycore")
 val rustBuildInputs = files(
     "src/main/rust/Cargo.toml",
     "src/main/rust/Cargo.lock",
@@ -191,41 +231,82 @@ val rustBuildInputs = files(
     "src/main/rust/susycore/build.rs",
 )
 
-rustTargets.forEach { target ->
-    tasks.register<Exec>("compileRust-${target.os}-${target.arch}") {
+val rustDockerImage = "susycore-rust-builder"
+
+val rustDevRelease = stringSelection("rustDevRelease", "RUST_DEV_RELEASE").flag()
+val devLibFile = File("src/main/rust/target/${if (rustDevRelease) "release" else "debug"}/${hostTarget.libPrefix}susycore.${hostTarget.libExt}")
+
+rustBuildableTargets.forEach { target ->
+    tasks.register<Exec>("compileRust-${target.id}") {
         group = "rust"
         description = "Compiles the susycore Rust natives for ${target.triple}"
         workingDir = rustProjectDir
-        commandLine("cargo", "build", "--release", "--target", target.triple)
+        if (target == hostTarget) {
+            commandLine("cargo", "build", "--release", "--target", target.triple)
+        } else {
+            dependsOn("buildRustDockerImage", "prepareRustCargoVolume")
+            commandLine(
+                "docker", "run", "--rm",
+                "-v", "${rustProjectDir.absolutePath}:/work",
+                "-v", "susycore-rust-cargo:/usr/local/cargo",
+                "-w", "/work",
+                rustDockerImage,
+                "cargo", target.tool,
+                *(if (target.tool == "xwin") arrayOf("build") else emptyArray()),
+                "--release", "--target", target.triple,
+            )
+        }
         inputs.dir(rustSourcesDir)
         inputs.files(rustBuildInputs)
         outputs.file(target.releaseLibFile)
     }
 }
 
+tasks.register<Exec>("buildRustDockerImage") {
+    group = "rust"
+    description = "Builds the Docker image used for cross-compiling the release natives"
+    workingDir = rustProjectDir
+    commandLine("docker", "build", "-q", "-t", rustDockerImage, ".")
+}
+
+tasks.register<Exec>("prepareRustCargoVolume") {
+    group = "rust"
+    description = "Populates the shared cargo cache volume from the Docker image (prevents a first-use race between parallel compile tasks)"
+    dependsOn("buildRustDockerImage")
+    outputs.upToDateWhen { false }
+    commandLine(
+        "docker", "run", "--rm",
+        "-v", "susycore-rust-cargo:/usr/local/cargo",
+        "--entrypoint", "true",
+        rustDockerImage,
+    )
+}
+
 tasks.register("buildRustNatives") {
     group = "build"
-    description = "Compiles the susycore Rust natives for all supported targets"
-    dependsOn(rustTargets.map { "compileRust-${it.os}-${it.arch}" })
+    description = "Compiles the susycore Rust natives for the selected targets (default: host platform, -PrustTargets=all for everything)"
+    dependsOn(rustBuildableTargets.map { "compileRust-${it.id}" })
     finalizedBy("copyRustNatives")
 }
 
 tasks.register<Copy>("copyRustNatives") {
     group = "rust"
     description = "Copies built Rust natives into the resources to be packaged"
+    dependsOn(rustBuildableTargets.map { "compileRust-${it.id}" })
+    outputs.upToDateWhen { false }
     into(nativesDir)
-    rustTargets.forEach { target ->
+    rustBuildableTargets.forEach { target ->
         from(target.releaseLibFile) {
-            rename { "susycore_${target.arch}_${target.os}.${target.libExt}" }
+            rename { target.libName }
         }
     }
 }
 
 tasks.register<Exec>("compileRustDev") {
     group = "rust"
-    description = "Compiles the susycore Rust natives (debug) for the dev machine"
+    description = "Compiles the susycore Rust native for the dev machine (${if (rustDevRelease) "release" else "debug"} profile; -PrustDevRelease / RUST_DEV_RELEASE=1 switches to release)"
     workingDir = rustProjectDir
-    commandLine("cargo", "build")
+    commandLine("cargo", "build", *(if (rustDevRelease) arrayOf("--release") else emptyArray()))
     inputs.dir(rustSourcesDir)
     inputs.files(rustBuildInputs)
     outputs.file(devLibFile)
@@ -233,10 +314,13 @@ tasks.register<Exec>("compileRustDev") {
 
 tasks.register<Copy>("copyRustNativesDev") {
     group = "rust"
-    description = "Copies the debug Rust native into the resources for dev runs"
+    description = "Copies the dev Rust native into the resources for runClient"
+    dependsOn("compileRustDev")
+    outputs.upToDateWhen { false }
     into(nativesDir)
+    val libName = hostTarget.libName
     from(devLibFile) {
-        rename { "susycore_${devArch}_${devOs}.$devLibExt" }
+        rename { libName }
     }
 }
 
