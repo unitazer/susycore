@@ -71,6 +71,7 @@ public class SuSyBlocks {
     public static BlocksS5BMRF S5BMRF;
     public static BlocksS6BMRF S6BMRF;
     public static BlocksRaidFlare BLOCKBANDITFLARE;
+    public static BlockGoog GOOG;
     public static BlockSpeaker SPEAKER;
     public static BlockCrucible CRUCIBLE;
 
@@ -139,6 +140,9 @@ public class SuSyBlocks {
             }
         }
 
+        GOOG = new BlockGoog();
+        GOOG.setRegistryName("goog");
+
         REGOLITH = new BlockRegolith();
         REGOLITH.setRegistryName("regolith");
         registerWalkingSpeedBonus();
@@ -160,6 +164,7 @@ public class SuSyBlocks {
                 registerItemModel(b);
         });
         registerItemModel(REGOLITH);
+        registerItemModel(GOOG);
     }
 
     @SideOnly(Side.CLIENT)
