@@ -167,7 +167,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
 
   Scene::with_scene_mut(world_id as usize, |xs| {
     let b = buffer.map(|x| x as u32).map(BlockColliderInfoHandle);
-    let c = Chunklet::new_with_blockhandle(x, y, z, b);
+    let c = Chunklet::new_with_blockhandle(b);
     xs.add_chunklet(x, y as u8, z, c);
   });
 }

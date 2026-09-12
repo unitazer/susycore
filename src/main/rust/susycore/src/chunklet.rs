@@ -21,18 +21,10 @@ pub struct Chunklet {
   pub blocks: [BlockHandle; CHUNK_VOLUME],
   pub aabb: Aabb,
   pub tree: Octree,
-  pub cx: i32,
-  pub cy: i32,
-  pub cz: i32,
   block_count: u32,
 }
 impl Chunklet {
-  pub fn new_with_blockhandle(
-    cx: i32,
-    cy: i32,
-    cz: i32,
-    blocks: [BlockColliderInfoHandle; CHUNK_VOLUME],
-  ) -> Self {
+  pub fn new_with_blockhandle(blocks: [BlockColliderInfoHandle; CHUNK_VOLUME]) -> Self {
     // i believe that this has no runtime cost, if it somehow does, either stop using NonZeroU32 or just
     // mem::transmute this array
     assert!(
@@ -40,9 +32,9 @@ impl Chunklet {
         == size_of::<[BlockHandle; CHUNK_VOLUME]>()
     );
 
-    Self::new(cx, cy, cz, blocks.map(|x| NonZeroU32::new(x.0)))
+    Self::new(blocks.map(|x| NonZeroU32::new(x.0)))
   }
-  pub fn new(cx: i32, cy: i32, cz: i32, blocks: [BlockHandle; CHUNK_VOLUME]) -> Self {
+  pub fn new(blocks: [BlockHandle; CHUNK_VOLUME]) -> Self {
     debug_assert!(!blocks.iter().all(|x| x.is_none()));
     let mut min = [u8::MAX, u8::MAX, u8::MAX];
     let mut max = [u8::MIN, u8::MIN, u8::MIN];
@@ -114,9 +106,6 @@ impl Chunklet {
       blocks,
       aabb: bounds,
       tree,
-      cx,
-      cy,
-      cz,
       block_count,
     }
   }

@@ -54,6 +54,7 @@
           pkgs.git
           rustToolchain
           pkgs.clippy
+          pkgs.rustfmt
           aarch64CrossCc
         ];
 
