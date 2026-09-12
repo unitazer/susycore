@@ -151,3 +151,102 @@ configurations {
         exclude(group = "org.scala-lang.plugins")
     }
 }
+
+// # Rust native library integration (src/main/rust -> src/main/resources/natives/susycore)
+
+data class RustTarget(
+    val triple: String,
+    val arch: String,
+    val os: String,
+    val libExt: String,
+    val libPrefix: String,
+) {
+    val releaseLibFile: File
+        get() = File("src/main/rust/target/$triple/release/${libPrefix}susycore.$libExt")
+}
+
+val rustTargets = listOf(
+    RustTarget("x86_64-unknown-linux-gnu", "x86_64", "linux", "so", "lib"),
+    RustTarget("aarch64-unknown-linux-gnu", "aarch64", "linux", "so", "lib"),
+)
+
+val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+val devOs = if (isWindows) "windows" else "linux"
+val devArch = "x86_64"
+val devLibExt = if (isWindows) "dll" else "so"
+val devLibPrefix = if (isWindows) "" else "lib"
+val devLibFile = File("src/main/rust/target/debug/${devLibPrefix}susycore.$devLibExt")
+
+val rustProjectDir = file("src/main/rust")
+val rustSourcesDir = file("src/main/rust/susycore/src")
+val rustBuildInputs = files(
+    "src/main/rust/Cargo.toml",
+    "src/main/rust/Cargo.lock",
+    "src/main/rust/susycore/Cargo.toml",
+    "src/main/rust/susycore/build.rs",
+)
+
+rustTargets.forEach { target ->
+    tasks.register<Exec>("compileRust-${target.os}-${target.arch}") {
+        group = "rust"
+        description = "Compiles the susycore Rust natives for ${target.triple}"
+        workingDir = rustProjectDir
+        commandLine("cargo", "build", "--release", "--target", target.triple)
+        inputs.dir(rustSourcesDir)
+        inputs.files(rustBuildInputs)
+        outputs.file(target.releaseLibFile)
+    }
+}
+
+tasks.register("buildRustNatives") {
+    group = "build"
+    description = "Compiles the susycore Rust natives for all supported targets"
+    dependsOn(rustTargets.map { "compileRust-${it.os}-${it.arch}" })
+    finalizedBy("copyRustNatives")
+}
+
+tasks.register<Copy>("copyRustNatives") {
+    group = "rust"
+    description = "Copies built Rust natives into the resources to be packaged"
+    into(nativesDir)
+    rustTargets.forEach { target ->
+        from(target.releaseLibFile) {
+            rename { "susycore_${target.arch}_${target.os}.${target.libExt}" }
+        }
+    }
+}
+
+tasks.register<Exec>("compileRustDev") {
+    group = "rust"
+    description = "Compiles the susycore Rust natives (debug) for the dev machine"
+    workingDir = rustProjectDir
+    commandLine("cargo", "build")
+    inputs.dir(rustSourcesDir)
+    inputs.files(rustBuildInputs)
+    outputs.file(devLibFile)
+}
+
+tasks.register<Copy>("copyRustNativesDev") {
+    group = "rust"
+    description = "Copies the debug Rust native into the resources for dev runs"
+    into(nativesDir)
+    from(devLibFile) {
+        rename { "susycore_${devArch}_${devOs}.$devLibExt" }
+    }
+}
+
+tasks.named("build") {
+    dependsOn("buildRustNatives")
+}
+
+tasks.processResources {
+    mustRunAfter("copyRustNatives", "copyRustNativesDev")
+}
+
+tasks.named("sourcesJar") {
+    mustRunAfter("copyRustNatives")
+}
+
+tasks.named("runClient") {
+    dependsOn("compileRustDev", "copyRustNativesDev")
+}
