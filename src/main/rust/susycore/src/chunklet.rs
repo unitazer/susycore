@@ -6,7 +6,6 @@ use rapier3d::parry::shape::Cuboid;
 use rapier3d::prelude::{
   FeatureId, MassProperties, PointQuery, RayCast, Shape, ShapeType, TypedShape,
 };
-use std::mem::size_of;
 use std::num::NonZeroU32;
 
 use crate::Real;
@@ -17,6 +16,7 @@ use crate::terrain::{CHUNK_SIDE, CHUNK_SIDE_LOG2, CHUNK_VOLUME};
 //Option<NonZeroU32> is 32 bits
 type BlockHandle = Option<NonZeroU32>;
 //16x16x16 block grid
+#[derive(Clone)]
 pub struct Chunklet {
   pub blocks: [BlockHandle; CHUNK_VOLUME],
   pub aabb: Aabb,
@@ -25,14 +25,7 @@ pub struct Chunklet {
 }
 impl Chunklet {
   pub fn new_with_blockhandle(blocks: [BlockColliderInfoHandle; CHUNK_VOLUME]) -> Self {
-    // i believe that this has no runtime cost, if it somehow does, either stop using NonZeroU32 or just
-    // mem::transmute this array
-    assert!(
-      size_of::<[BlockColliderInfoHandle; CHUNK_VOLUME]>()
-        == size_of::<[BlockHandle; CHUNK_VOLUME]>()
-    );
-
-    Self::new(blocks.map(|x| NonZeroU32::new(x.0)))
+    Self::new(blocks.map(BlockColliderInfoHandle::into_block))
   }
   pub fn new(blocks: [BlockHandle; CHUNK_VOLUME]) -> Self {
     debug_assert!(!blocks.iter().all(|x| x.is_none()));
@@ -204,7 +197,7 @@ impl Shape for Chunklet {
   }
 
   fn clone_dyn(&self) -> Box<dyn Shape> {
-    todo!()
+    Box::new(self.clone())
   }
 
   fn scale_dyn(
@@ -266,19 +259,73 @@ impl Shape for Chunklet {
 impl RayCast for Chunklet {
   fn cast_local_ray_and_get_normal(
     &self,
-    _ray: &Ray,
-    _max_time_of_impact: f32,
-    _solid: bool,
+    ray: &Ray,
+    max_time_of_impact: f32,
+    solid: bool,
   ) -> Option<RayIntersection> {
-    todo!()
+    let lock = COLLIDERS.read().unwrap();
+    let end = ray.origin + ray.dir * max_time_of_impact;
+    let qmins = [
+      ray.origin.x.min(end.x) - 1.0,
+      ray.origin.y.min(end.y) - 1.0,
+      ray.origin.z.min(end.z) - 1.0,
+    ];
+    let qmaxs = [
+      ray.origin.x.max(end.x) + 1.0,
+      ray.origin.y.max(end.y) + 1.0,
+      ray.origin.z.max(end.z) + 1.0,
+    ];
+    let mut best: Option<(Real, Vec3)> = None;
+    self.tree.query_aabb(qmins, qmaxs, |handle, x, y, z| {
+      let Some(info) = lock.get(BlockColliderInfoHandle(handle)) else {
+        return;
+      };
+      for aabb in info.boxes.iter() {
+        let center = aabb.center() + Vec3::new(x as f32, y as f32, z as f32);
+        let cuboid = Cuboid::new(aabb.half_extents());
+        let local_ray = Ray::new(ray.origin - center, ray.dir);
+        if let Some(hit) =
+          cuboid.cast_local_ray_and_get_normal(&local_ray, max_time_of_impact, solid)
+          && best.is_none_or(|(toi, _)| hit.time_of_impact < toi)
+        {
+          best = Some((hit.time_of_impact, hit.normal));
+        }
+      }
+    });
+    best.map(|(toi, normal)| RayIntersection::new(toi, normal, FeatureId::Face(0)))
   }
 }
 impl PointQuery for Chunklet {
-  fn project_local_point(&self, _pt: Vec3, _solid: bool) -> PointProjection {
-    todo!()
+  fn project_local_point(&self, pt: Vec3, solid: bool) -> PointProjection {
+    let lock = COLLIDERS.read().unwrap();
+    let mut best: Option<(Real, PointProjection)> = None;
+    self
+      .tree
+      .query_aabb([0.0; 3], [CHUNK_SIDE as f32; 3], |handle, x, y, z| {
+        let Some(info) = lock.get(BlockColliderInfoHandle(handle)) else {
+          return;
+        };
+        for aabb in info.boxes.iter() {
+          let center = aabb.center() + Vec3::new(x as f32, y as f32, z as f32);
+          let cuboid = Cuboid::new(aabb.half_extents());
+          let proj = cuboid.project_local_point(pt - center, solid);
+          let projected = PointProjection::new(proj.is_inside, proj.point + center);
+          let dist = (projected.point - pt).length_squared();
+          if projected.is_inside {
+            best = Some((0.0, projected));
+            return;
+          }
+          if best.is_none_or(|(best_dist, _)| dist < best_dist) {
+            best = Some((dist, projected));
+          }
+        }
+      });
+    best
+      .map(|(_, proj)| proj)
+      .unwrap_or(PointProjection::new(false, pt))
   }
 
-  fn project_local_point_and_get_feature(&self, _pt: Vec3) -> (PointProjection, FeatureId) {
-    todo!()
+  fn project_local_point_and_get_feature(&self, pt: Vec3) -> (PointProjection, FeatureId) {
+    (self.project_local_point(pt, false), FeatureId::Face(0))
   }
 }

@@ -5,12 +5,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.jetbrains.annotations.Nullable;
-
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
+
+import org.jetbrains.annotations.Nullable;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -42,8 +42,7 @@ public final class SubWorldContainer {
         return null;
     }
 
-    @Nullable
-    public SubWorldPlot getPlot(int chunkX, int chunkZ) {
+    @Nullable public SubWorldPlot getPlot(int chunkX, int chunkZ) {
         return this.chunkToPlot.get(ChunkPos.asLong(chunkX, chunkZ));
     }
 

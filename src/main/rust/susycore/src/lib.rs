@@ -1,4 +1,5 @@
 pub mod block_collisions;
+pub mod body;
 pub mod chunklet;
 pub mod dispatcher;
 pub mod logger;
@@ -21,6 +22,7 @@ use self::logger::SusycoreJavaLogger;
 pub type IVec3 = Vector3<i32>;
 pub type Real = rapier3d::math::Real;
 pub type JResult<T> = Result<T, jni::errors::Error>;
+
 #[allow(
   unsafe_op_in_unsafe_fn,
   clippy::all,

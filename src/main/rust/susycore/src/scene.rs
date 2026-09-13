@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::mem;
 use std::sync::{LazyLock, Mutex};
 
@@ -9,6 +10,7 @@ use rapier3d::math::Vec3;
 use rapier3d::parry::query::{DefaultQueryDispatcher, QueryDispatcher};
 use rapier3d::prelude::*;
 
+use crate::body::{BodyEntry, EntityId};
 use crate::chunklet::Chunklet;
 use crate::dispatcher::ChunkletDispatcher;
 use crate::terrain::TerrainData;
@@ -20,6 +22,8 @@ pub struct Scene {
   pub world: PhysicsWorld,
   pub terrain: TerrainData,
   pub gravity: Vec3,
+  pub chunklet_bodies: HashMap<EntityId, BodyEntry>,
+  pub collider_owners: HashMap<ColliderHandle, EntityId>,
 }
 //TODO maybe there is a less stupid way of storing these?
 static SCENES: LazyLock<Mutex<Vec<Scene>>> = LazyLock::new(|| Mutex::new(Vec::new()));
@@ -85,7 +89,7 @@ impl Scene {
       x.clear();
     });
   }
-  fn new(gravity: Vec3) -> Self {
+  pub(crate) fn new(gravity: Vec3) -> Self {
     let world = PhysicsWorld {
       gravity,
       integration_parameters: IntegrationParameters {
@@ -109,6 +113,8 @@ impl Scene {
       gravity,
       world,
       terrain,
+      chunklet_bodies: HashMap::new(),
+      collider_owners: HashMap::new(),
     }
   }
 }

@@ -291,7 +291,7 @@ tasks.register("buildRustNatives") {
 
 tasks.register<Copy>("copyRustNatives") {
     group = "rust"
-    description = "Copies built Rust natives into the resources to be packaged"
+    description = "copies rust natives to resources dir"
     dependsOn(rustBuildableTargets.map { "compileRust-${it.id}" })
     outputs.upToDateWhen { false }
     into(nativesDir)
@@ -304,7 +304,7 @@ tasks.register<Copy>("copyRustNatives") {
 
 tasks.register<Exec>("compileRustDev") {
     group = "rust"
-    description = "Compiles the susycore Rust native for the dev machine (${if (rustDevRelease) "release" else "debug"} profile; -PrustDevRelease / RUST_DEV_RELEASE=1 switches to release)"
+    description = "compiles rust natives with locally available tools (${if (rustDevRelease) "release" else "debug"} profile; -PrustDevRelease / RUST_DEV_RELEASE=1 switches to release)"
     workingDir = rustProjectDir
     commandLine("cargo", "build", *(if (rustDevRelease) arrayOf("--release") else emptyArray()))
     inputs.dir(rustSourcesDir)
@@ -322,6 +322,25 @@ tasks.register<Copy>("copyRustNativesDev") {
     from(devLibFile) {
         rename { libName }
     }
+}
+
+tasks.register<Exec>("rustFmt") {
+    group = "rust"
+    description = "runs cargo fmt"
+    workingDir = rustProjectDir
+    commandLine("cargo", "fmt")
+}
+
+tasks.register<Exec>("rustClippyFix") {
+    group = "rust"
+    description = "runs cargo clippy --fix"
+    workingDir = rustProjectDir
+    commandLine("cargo", "clippy", "--fix", "--allow-dirty", "--allow-staged")
+    mustRunAfter("rustFmt")
+}
+
+tasks.matching { it.name == "spotlessApply" }.configureEach {
+    dependsOn("rustFmt", "rustClippyFix")
 }
 
 tasks.named("build") {

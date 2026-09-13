@@ -5,9 +5,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-
-import org.jetbrains.annotations.Nullable;
+import java.util.concurrent.ConcurrentHashMap;
 
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
@@ -29,11 +29,16 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.Chunk;
+import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 import net.minecraftforge.common.util.Constants;
 import net.minecraftforge.fml.common.registry.IEntityAdditionalSpawnData;
 
+import org.jetbrains.annotations.Nullable;
+
 import gregtech.api.GregTechAPI;
 import io.netty.buffer.ByteBuf;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.block.BlockExtraDataHandler;
 import supersymmetry.api.block.BlockExtraDataRegistry;
@@ -44,6 +49,7 @@ import supersymmetry.api.subworld.SubWorldRegistry;
 import supersymmetry.api.subworld.SubWorldRemovalReason;
 import supersymmetry.api.util.SuSyUtility;
 import supersymmetry.client.renderer.subworld.SubWorldChunkRenderer;
+import supersymmetry.common.Native;
 import supersymmetry.common.network.SPacketSubworldPlotSync;
 
 public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawnData {
@@ -52,10 +58,8 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
 
         public final BlockPos pos;
         public final IBlockState state;
-        @Nullable
-        public final NBTTagCompound tileData;
-        @Nullable
-        public final NBTTagCompound extra;
+        @Nullable public final NBTTagCompound tileData;
+        @Nullable public final NBTTagCompound extra;
 
         public BlockStateInfo(BlockPos pos, IBlockState state) {
             this(pos, state, null, null);
@@ -180,6 +184,27 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
     private Quaternion prevRotation;
     private Vec3d prevRotationPoint;
 
+    private static final Map<SubWorldPlot, PhysicsWorldEntity> PLOT_ENTITIES = new ConcurrentHashMap<>();
+    private static final List<AxisAlignedBB> BODY_AABB_TMP = new ArrayList<>();
+
+    private boolean bodyCreated;
+    private final IntSet syncedSubchunks = new IntOpenHashSet();
+
+    @Nullable public static PhysicsWorldEntity forBlockPos(World world, BlockPos globalPos) {
+        SubWorldPlot plot = SubWorldRegistry.find(world, globalPos.getX() >> 4, globalPos.getZ() >> 4);
+        return plot == null ? null : PLOT_ENTITIES.get(plot);
+    }
+
+    @Nullable public static PhysicsWorldEntity fromRaycastHit(World world, Rapier.RaycastHit hit) {
+        if (hit == null || hit.tag < 0) return null;
+        Entity e = world.getEntityByID(hit.tag);
+        return e instanceof PhysicsWorldEntity ? (PhysicsWorldEntity) e : null;
+    }
+
+    public static java.util.Collection<PhysicsWorldEntity> activeBodies() {
+        return PLOT_ENTITIES.values();
+    }
+
     public PhysicsWorldEntity(World world) {
         super(world);
     }
@@ -258,13 +283,138 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         return SuSyUtility.lerp(prevRotationPoint, current, partialTicks);
     }
 
-    @Nullable
-    public SubWorldPlot getPlot() {
+    @Nullable public SubWorldPlot getPlot() {
         return plot;
     }
 
     public void attachPlot(SubWorldPlot plot) {
         this.plot = plot;
+        PLOT_ENTITIES.put(plot, this);
+    }
+
+    public boolean hasPhysicsBody() {
+        return bodyCreated;
+    }
+
+    @Nullable public BlockPos getLocalPos(BlockPos globalPos) {
+        return plot == null ? null : plot.toLocal(globalPos);
+    }
+
+    public Vec3d worldPointFromLocal(BlockPos local) {
+        Quaternion q = getRotation();
+        Vec3d rp = getRotationPoint();
+        Vec3d rotated = q.rotatePoint(new Vec3d(local.getX() - rp.x, local.getY() - rp.y, local.getZ() - rp.z));
+        return new Vec3d(posX + rotated.x, posY + rotated.y, posZ + rotated.z);
+    }
+
+    public void applyImpulseAtPoint(Vec3d worldPoint, Vec3d impulse) {
+        if (!bodyCreated) return;
+        Rapier.applyImpulseAtPoint(world, getEntityId(), worldPoint, impulse);
+    }
+
+    private static final int MAX_BODY_CHUNKS = 256;
+
+    private int subchunkKey(int lx, int ly, int lz) {
+        return (lx << 16) | (lz << 8) | ly;
+    }
+
+    private void ensurePhysicsBody() {
+        if (world.isRemote || bodyCreated || plot == null || !Native.ENABLED) return;
+        if (Rapier.worldId(world) < 0) return;
+        if (plot.getSizeChunksX() >= MAX_BODY_CHUNKS || plot.getSizeChunksZ() >= MAX_BODY_CHUNKS) {
+            SusyLog.logger.error("plot {} too large for a physics body ({} x {} chunks)",
+                    plot, plot.getSizeChunksX(), plot.getSizeChunksZ());
+            return;
+        }
+        Quaternion rot = getRotation();
+        if (!Rapier.createChunkletBody(world, getEntityId(), posX, posY, posZ, rot)) return;
+        bodyCreated = true;
+        syncedSubchunks.clear();
+        Rapier.setChunkletBodyPose(world, getEntityId(), getPositionVector(), rot,
+                new Vec3d(motionX, motionY, motionZ));
+        for (Chunk chunk : plot.getLoadedChunks().values()) {
+            syncChunkToBody(chunk);
+        }
+    }
+
+    private void removePhysicsBody() {
+        if (!bodyCreated) return;
+        bodyCreated = false;
+        syncedSubchunks.clear();
+        if (Native.ENABLED) {
+            Rapier.removeChunkletBody(world, getEntityId());
+        }
+    }
+
+    private void syncChunkToBody(Chunk chunk) {
+        ExtendedBlockStorage[] storages = chunk.getBlockStorageArray();
+        for (int sy = 0; sy < storages.length; sy++) {
+            if (storages[sy] == null || storages[sy].isEmpty()) continue;
+            syncSubchunkToBody(chunk, storages[sy]);
+        }
+    }
+
+    private void syncSubchunkToBody(Chunk chunk, ExtendedBlockStorage storage) {
+        int lx = chunk.x - plot.getOriginChunkX();
+        int lz = chunk.z - plot.getOriginChunkZ();
+        int ly = storage.getYLocation() >> 4;
+        int key = subchunkKey(lx, ly, lz);
+        BlockPos.PooledMutableBlockPos tmp = BlockPos.PooledMutableBlockPos.retain();
+        int[] handles = Rapier.computePlotSubchunkColliderInfo(plot, chunk, storage, BODY_AABB_TMP, tmp);
+        tmp.release();
+        if (handles == null) {
+            if (syncedSubchunks.remove(key)) {
+                Rapier.removeBodyChunk(world, getEntityId(), lx, ly, lz);
+            }
+            return;
+        }
+        Vec3d rp = getRotationPoint();
+        double ox = (chunk.x - plot.getOriginChunkX()) * 16 - rp.x;
+        double oy = storage.getYLocation() - SubWorldPlot.RENDER_ORIGIN_Y - rp.y;
+        double oz = (chunk.z - plot.getOriginChunkZ()) * 16 - rp.z;
+        Rapier.addBodyChunk(world, getEntityId(), lx, ly, lz, ox, oy, oz, handles);
+        syncedSubchunks.add(key);
+    }
+
+    private void syncPlotBlockToBody(BlockPos local) {
+        if (!bodyCreated) return;
+        int globalY = local.getY() + SubWorldPlot.RENDER_ORIGIN_Y;
+        int lx = local.getX() >> 4;
+        int lz = local.getZ() >> 4;
+        int ly = globalY >> 4;
+        Chunk chunk = plot.getLoadedChunk(plot.getOriginChunkX() + lx, plot.getOriginChunkZ() + lz);
+        if (chunk == null) return;
+        ExtendedBlockStorage[] storages = chunk.getBlockStorageArray();
+        if (ly >= 0 && ly < storages.length) {
+            ExtendedBlockStorage storage = storages[ly];
+            if (storage != null && !storage.isEmpty()) {
+                if (!syncedSubchunks.contains(subchunkKey(lx, ly, lz))) {
+                    syncSubchunkToBody(chunk, storage);
+                }
+            } else {
+                if (syncedSubchunks.remove(subchunkKey(lx, ly, lz))) {
+                    Rapier.removeBodyChunk(world, getEntityId(), lx, ly, lz);
+                }
+            }
+        }
+        BlockPos.PooledMutableBlockPos tmp = BlockPos.PooledMutableBlockPos.retain();
+        for (int[] offset : Rapier.BLOCK_CHANGE_OFFSETS) {
+            BlockPos neighbor = local.add(offset[0], offset[1], offset[2]);
+            int nGlobalY = neighbor.getY() + SubWorldPlot.RENDER_ORIGIN_Y;
+            int nlx = neighbor.getX() >> 4;
+            int nlz = neighbor.getZ() >> 4;
+            int nly = nGlobalY >> 4;
+            int nKey = subchunkKey(nlx, nly, nlz);
+            if (!syncedSubchunks.contains(nKey)) continue;
+            BlockPos global = plot.toGlobal(neighbor);
+            tmp.setPos(global);
+            int handle = Rapier.computeBlockColliderHandle(world, plot, global, BODY_AABB_TMP, tmp);
+            if (!Rapier.updateBodyChunkBlock(world, getEntityId(), nlx, nly, nlz, neighbor.getX() & 15,
+                    nGlobalY & 15, neighbor.getZ() & 15, handle)) {
+                syncedSubchunks.remove(nKey);
+            }
+        }
+        tmp.release();
     }
 
     public void setPlotBlock(BlockPos local, IBlockState state, @Nullable NBTTagCompound tileData) {
@@ -274,6 +424,7 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         ensurePlotCovers(local);
         BlockPos global = plot.toGlobal(local);
         plot.setBlockState(global, state, tileData);
+        syncPlotBlockToBody(local);
     }
 
     public void transferExtraState(BlockPos sourcePos, BlockPos local) {
@@ -302,9 +453,11 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
 
     @Override
     public void onEntityUpdate() {
+        super.onEntityUpdate();
         if (world.isRemote) {
             prevRotation = getRotation();
             prevRotationPoint = getRotationPoint();
+            refreshPlotAABB();
             return;
         }
         if (ticksExisted >= 2) {
@@ -324,6 +477,17 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
                 GregTechAPI.networkHandler.sendTo(packet, player);
             }
         }
+        ensurePhysicsBody();
+        if (bodyCreated) {
+            double[] pose = Rapier.getChunkletBodyPose(world, getEntityId());
+            if (pose != null && !(pose[3] == 0 && pose[4] == 0 && pose[5] == 0 && pose[6] == 0)) {
+                setPosition(pose[0], pose[1], pose[2]);
+                dataManager.set(POSE_ROTATION, new Quaternion(pose[6], pose[3], pose[4], pose[5]));
+                motionX = pose[7];
+                motionY = pose[8];
+                motionZ = pose[9];
+            }
+        }
         refreshPlotAABB();
     }
 
@@ -337,6 +501,14 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
     public void onRemovedFromWorld() {
         super.onRemovedFromWorld();
         destroyPlot();
+    }
+
+    @Override
+    public void onAddedToWorld() {
+        super.onAddedToWorld();
+        if (!world.isRemote) {
+            ensurePhysicsBody();
+        }
     }
 
     public List<BlockStateInfo> collectBlocks() {
@@ -482,7 +654,9 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         int targetH = Math.max(plot.getSizeChunksZ(), localChunkZ + 1);
         SubWorldPlot grown = container.growPlot(plot, targetW, targetH);
         if (grown != plot) {
+            PLOT_ENTITIES.remove(plot);
             this.plot = grown;
+            PLOT_ENTITIES.put(grown, this);
             this.plotRelocated = true;
         }
     }
@@ -520,7 +694,9 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
             if (world.isRemote) {
                 SubWorldChunkRenderer.pruneDead();
             }
+            removePhysicsBody();
             SubWorldRegistry.markRemoved(world, plot, SubWorldRemovalReason.ENTITY_DEAD);
+            PLOT_ENTITIES.remove(plot);
             plot = null;
         }
     }
@@ -534,11 +710,14 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
             } else {
                 plot.destroy();
             }
+            PLOT_ENTITIES.remove(plot);
+            removePhysicsBody();
         }
         SubWorldPlot rebuilt = new SubWorldPlot(world, originChunkX, originChunkZ, sizeChunksX, sizeChunksZ);
         SubWorldRegistry.register(rebuilt);
         buildPlot(rebuilt, blocks);
         plot = rebuilt;
+        PLOT_ENTITIES.put(rebuilt, this);
     }
 
     private void buildPlot(SubWorldPlot target, List<BlockStateInfo> blocks) {
@@ -568,11 +747,14 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         }
         if (plot != null) {
             container.replace(plot, SubWorldRemovalReason.REMOVED);
+            PLOT_ENTITIES.remove(plot);
+            removePhysicsBody();
         }
         container.freeOwnedRect(previous);
         SubWorldPlot reallocated = container.allocatePlot(sizeChunksX, sizeChunksZ);
         buildPlot(reallocated, blocks);
         plot = reallocated;
+        PLOT_ENTITIES.put(reallocated, this);
         plotRelocated = true;
         refreshPlotAABB();
     }

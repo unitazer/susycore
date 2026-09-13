@@ -3,22 +3,20 @@ use rapier3d::prelude::{
   ColliderBuilder, ColliderHandle, ColliderSet, IslandManager, RigidBodySet, SharedShape,
 };
 use std::collections::HashMap;
-use std::mem::size_of;
-use std::num::NonZeroU32;
 
 use crate::Real;
 use crate::block_collisions::BlockColliderInfoHandle;
 use crate::chunklet::Chunklet;
 
 //the minecraft world is (6*10^7)^2 * 256 blocks which is ~60^2 so it can be packed
-#[derive(Hash, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub struct PackedChunkletCoords(u64);
 impl PackedChunkletCoords {
   //chunk space
   #[inline(always)]
   pub fn from_xyz(x: i32, y: u8, z: i32) -> Self {
-    debug_assert!(x.abs() < (3_000_000 >> 4));
-    debug_assert!(z.abs() < (3_000_000 >> 4));
+    assert!(x.abs() < (3_000_000 >> 4));
+    assert!(z.abs() < (3_000_000 >> 4));
     let packed = ((x < 0) as u64) << 63
       | ((z < 0) as u64) << 62
       | (x.unsigned_abs() as u64) << 38
@@ -72,11 +70,6 @@ impl TerrainData {
       .copied()
   }
 
-  //a very unsafe function btw
-  fn handle_to_blockhandle(h: BlockColliderInfoHandle) -> Option<NonZeroU32> {
-    NonZeroU32::new(h.0)
-  }
-
   pub fn update(
     &mut self,
     cx: i32,
@@ -95,20 +88,7 @@ impl TerrainData {
       return;
     };
 
-    assert_eq!(
-      size_of::<BlockColliderInfoHandle>(),
-      size_of::<Option<NonZeroU32>>()
-    );
-    assert_eq!(
-      Self::handle_to_blockhandle(BlockColliderInfoHandle(0)),
-      None
-    );
-    assert_eq!(
-      Self::handle_to_blockhandle(BlockColliderInfoHandle(1)),
-      NonZeroU32::new(1)
-    );
-
-    let value = Self::handle_to_blockhandle(new);
+    let value = new.into_block();
     let removed = {
       let Some(chunk) = colliders
         .get_mut(handle)
@@ -185,23 +165,17 @@ mod tests {
 
   #[test]
   fn air_handle_maps_to_none() {
-    assert_eq!(
-      TerrainData::handle_to_blockhandle(BlockColliderInfoHandle(0)),
-      None
-    );
+    assert_eq!(BlockColliderInfoHandle(0).into_block(), None);
   }
 
   #[test]
   fn nonzero_handle_maps_to_some() {
+    assert_eq!(BlockColliderInfoHandle(1).into_block(), NonZeroU32::new(1));
     assert_eq!(
-      TerrainData::handle_to_blockhandle(BlockColliderInfoHandle(1)),
-      NonZeroU32::new(1)
-    );
-    assert_eq!(
-      TerrainData::handle_to_blockhandle(BlockColliderInfoHandle(u32::MAX)),
+      BlockColliderInfoHandle(u32::MAX).into_block(),
       NonZeroU32::new(u32::MAX)
     );
-    assert!(TerrainData::handle_to_blockhandle(BlockColliderInfoHandle(u32::MAX)).is_some());
+    assert!(BlockColliderInfoHandle(u32::MAX).into_block().is_some());
   }
 
   const LIMIT: i32 = (3_000_000 >> 4) - 1;

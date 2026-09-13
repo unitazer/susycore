@@ -4,10 +4,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import org.jetbrains.annotations.Nullable;
-
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
+
+import org.jetbrains.annotations.Nullable;
 
 public final class SubWorldRegistry {
 
@@ -43,8 +43,7 @@ public final class SubWorldRegistry {
         }
     }
 
-    @Nullable
-    public static SubWorldPlot find(World world, int chunkX, int chunkZ) {
+    @Nullable public static SubWorldPlot find(World world, int chunkX, int chunkZ) {
         SubWorldContainer container = SubWorldContainer.getContainer(world);
         return container == null ? null : container.getPlot(chunkX, chunkZ);
     }
@@ -54,8 +53,7 @@ public final class SubWorldRegistry {
         return plot == null ? null : plot.getChunk(chunkX, chunkZ);
     }
 
-    @Nullable
-    public static Chunk peekPlotChunk(World world, int chunkX, int chunkZ) {
+    @Nullable public static Chunk peekPlotChunk(World world, int chunkX, int chunkZ) {
         SubWorldPlot plot = find(world, chunkX, chunkZ);
         return plot == null ? null : plot.getLoadedChunk(chunkX, chunkZ);
     }

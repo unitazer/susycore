@@ -1,13 +1,13 @@
 package supersymmetry.client.renderer.handler.entity;
 
-import org.jetbrains.annotations.Nullable;
-
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.entity.Render;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
+
+import org.jetbrains.annotations.Nullable;
 
 import supersymmetry.api.phys.PhysicsWorldEntity;
 import supersymmetry.client.renderer.subworld.SubWorldChunkRenderer;
@@ -37,8 +37,7 @@ public class RenderSubWorldEntity extends Render<PhysicsWorldEntity> {
         GlStateManager.popMatrix();
     }
 
-    @Nullable
-    @Override
+    @Nullable @Override
     protected ResourceLocation getEntityTexture(PhysicsWorldEntity entity) {
         return null;
     }

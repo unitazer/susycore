@@ -8,6 +8,7 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 
 import org.jetbrains.annotations.NotNull;
 
@@ -35,6 +36,8 @@ import supersymmetry.api.phys.Rapier;
 import supersymmetry.api.subworld.SubWorldPlot;
 
 public class TestingMTE extends MultiblockWithDisplayBase {
+
+    private PhysicsWorldEntity spawned;
 
     public TestingMTE(ResourceLocation res) {
         super(res);
@@ -152,6 +155,44 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                         (clickData -> {
                             goog();
                         })));
+        builder.widget(
+                new ClickButtonWidget(
+                        14,
+                        100,
+                        38,
+                        18,
+                        "impulse",
+                        (clickData -> {
+                            if (spawned == null || spawned.isDead || !spawned.hasPhysicsBody()) return;
+                            double[] pose = Rapier.getChunkletBodyPose(this.getWorld(), spawned.getEntityId());
+                            if (pose == null) return;
+                            float[] size = spawned.getPlotSize();
+                            Vec3d point = spawned.worldPointFromLocal(new BlockPos(
+                                    (int) (size[0] / 2), (int) (size[1] / 2) + 1, (int) (size[2] / 2)));
+                            spawned.applyImpulseAtPoint(point, new Vec3d(pose[10] * 5, 0, 0));
+                        })));
+        builder.widget(
+                new ClickButtonWidget(
+                        14,
+                        120,
+                        38,
+                        18,
+                        "raycast",
+                        (clickData -> {
+                            if (spawned == null || spawned.isDead) return;
+                            Vec3d origin = spawned.getPositionVector().add(0, 12, 0);
+                            Rapier.RaycastHit hit = Rapier.raycast(this.getWorld(), origin, new Vec3d(0, -1, 0),
+                                    64);
+                            PhysicsWorldEntity hitBody = PhysicsWorldEntity.fromRaycastHit(this.getWorld(), hit);
+                            SusyLog.logger.info(
+                                    "raycast from {} hit dist={} normal={} terrainBlock={} body={}",
+                                    origin,
+                                    hit == null ? "nothing" : hit.dist,
+                                    hit == null ? "-" : hit.normal,
+                                    hit == null || hit.tag >= 0 ? "-" :
+                                            new BlockPos(origin.add(new Vec3d(0, -hit.dist, 0))),
+                                    hitBody);
+                        })));
 
         return builder;
     }
@@ -213,6 +254,7 @@ public class TestingMTE extends MultiblockWithDisplayBase {
 
             plot.seedLight();
             this.getWorld().spawnEntity(entity);
+            this.spawned = entity;
             for (BlockPos lpos : toRemove) {
                 this.getWorld().setBlockToAir(lpos);
             }

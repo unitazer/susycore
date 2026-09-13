@@ -1,4 +1,5 @@
 use std::mem::{self};
+use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
 
 use jni::EnvUnowned;
@@ -24,6 +25,13 @@ pub fn clear_caches() {
 pub const AIR_HANDLE: BlockColliderInfoHandle = BlockColliderInfoHandle(0);
 #[derive(Eq, PartialOrd, Ord, PartialEq, Hash, Copy, Clone)]
 pub struct BlockColliderInfoHandle(pub(crate) u32);
+
+impl BlockColliderInfoHandle {
+  #[inline(always)]
+  pub fn into_block(self) -> Option<NonZeroU32> {
+    NonZeroU32::new(self.0)
+  }
+}
 
 #[derive(PartialEq, Clone, Debug)]
 pub struct MinecraftBlockColliderInfo {

@@ -31,8 +31,7 @@ public class RenderGlobalMixin {
     @Shadow
     private Minecraft mc;
 
-    @Unique
-    private float susy$partialTicks;
+    @Unique private float susy$partialTicks;
 
     /**
      * Vanilla {@code renderEntities} only ever visits an entity if the single 16^3

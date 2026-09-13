@@ -22,6 +22,7 @@
 
       rustToolchain = fenix.packages.${system}.combine [
         fenix.packages.${system}.stable.toolchain
+        fenix.packages.${system}.stable.rust-src
         fenix.packages.${system}.targets.aarch64-unknown-linux-gnu.stable.rust-std
       ];
       aarch64CrossCc = pkgs.pkgsCross.aarch64-multiplatform.stdenv.cc;
@@ -53,6 +54,7 @@
           pkgs.jq
           pkgs.git
           rustToolchain
+          fenix.packages.${system}.rust-analyzer
           pkgs.clippy
           pkgs.rustfmt
           aarch64CrossCc

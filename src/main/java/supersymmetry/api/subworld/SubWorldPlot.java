@@ -2,8 +2,6 @@ package supersymmetry.api.subworld;
 
 import java.util.Arrays;
 
-import org.jetbrains.annotations.Nullable;
-
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Biomes;
 import net.minecraft.init.Blocks;
@@ -16,6 +14,8 @@ import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 import net.minecraft.world.gen.ChunkProviderServer;
+
+import org.jetbrains.annotations.Nullable;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -111,8 +111,7 @@ public class SubWorldPlot {
         }
     }
 
-    @Nullable
-    public Chunk getLoadedChunk(int chunkX, int chunkZ) {
+    @Nullable public Chunk getLoadedChunk(int chunkX, int chunkZ) {
         if (!inBounds(chunkX, chunkZ)) {
             return null;
         }

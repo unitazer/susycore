@@ -99,7 +99,7 @@ public class EventHandlers {
         GameRules gameRules = event.getWorld().getGameRules();
 
         World world = event.getWorld();
-        if (!world.isRemote && !(world instanceof WorldServerMulti)) {
+        if (!world.isRemote && !(world instanceof WorldServerMulti) && Native.ENABLED) {
             Rapier.initialize_world(world, -10.0f, 0.0);
             chunkSyncManagers.put((WorldServer) world, new ChunkSyncManager((WorldServer) world));
         }
@@ -116,7 +116,8 @@ public class EventHandlers {
     @SubscribeEvent
     public static void onWorldUnload(WorldEvent.Unload event) {
         World world = event.getWorld();
-        if (!world.isRemote) {
+        if (!world.isRemote && world instanceof WorldServer server) {
+            chunkSyncManagers.remove(server);
             Rapier.destroyWorld(world);
         }
     }
@@ -139,9 +140,10 @@ public class EventHandlers {
         if (event.phase == TickEvent.Phase.END) {
             long start = System.nanoTime();
             ChunkSyncManager csm = chunkSyncManagers.get(world);
-            csm.update();
+            if (csm != null) {
+                csm.update();
+            }
             Rapier.step_world(world);
-            // csm.update();
             double dt = (System.nanoTime() - start) / 1000000.0;
             if (dt > 10) {
                 SusyLog.logger.warn(String.format("pstep took %.3f ms", dt));

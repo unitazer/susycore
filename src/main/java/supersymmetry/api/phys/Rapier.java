@@ -18,10 +18,14 @@ import net.minecraft.world.chunk.BlockStateContainer;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
+import org.jetbrains.annotations.Nullable;
+
 import com.mojang.realmsclient.util.Pair;
 
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import supersymmetry.api.SusyLog;
+import supersymmetry.api.subworld.SubWorldPlot;
+import supersymmetry.api.subworld.SubWorldRegistry;
 import supersymmetry.mixins.minecraft.BlockStateContainerAccessor;
 
 public class Rapier {
@@ -43,7 +47,16 @@ public class Rapier {
     // data to it
     private static double[] cache = new double[32];
 
+    private static final double[] bodyCache = new double[11];
+
+    private static final double[] rayCache = new double[5];
+
     public static ArrayList<AbstractPhysicsEntity> entities = new ArrayList<>();
+
+    public static int worldId(World world) {
+        Integer id = initializedWorlds.get(world);
+        return id == null ? -1 : id;
+    }
 
     // drag should be very low unless its somewhere in an endless ocean
     public static void initialize_world(World world, float gravity, double drag) {
@@ -114,8 +127,27 @@ public class Rapier {
         addChunk(world_id, x, yLevel, z, data);
     }
 
+    public static int[] computeSubchunkColliderInfo(
+                                                    World world,
+                                                    Chunk chunk,
+                                                    ExtendedBlockStorage subchunk,
+                                                    List<AxisAlignedBB> aabbTmp,
+                                                    PooledMutableBlockPos pos) {
+        return computeSubchunkColliderInfo(world, null, chunk, subchunk, aabbTmp, pos);
+    }
+
+    public static int[] computePlotSubchunkColliderInfo(
+                                                        SubWorldPlot plot,
+                                                        Chunk chunk,
+                                                        ExtendedBlockStorage subchunk,
+                                                        List<AxisAlignedBB> aabbTmp,
+                                                        PooledMutableBlockPos pos) {
+        return computeSubchunkColliderInfo(plot.getWorld(), plot, chunk, subchunk, aabbTmp, pos);
+    }
+
     private static int[] computeSubchunkColliderInfo(
                                                      World world,
+                                                     @Nullable SubWorldPlot plot,
                                                      Chunk chunk,
                                                      ExtendedBlockStorage subchunk,
                                                      List<AxisAlignedBB> aabbTmp,
@@ -129,7 +161,7 @@ public class Rapier {
                 stateIds[i] = s == null ? 0 : Block.getStateId(s);
             }
         } catch (Throwable t) {
-            return computeSubchunkColliderInfoSlow(world, chunk, subchunk, aabbTmp, pos);
+            return computeSubchunkColliderInfoSlow(world, plot, chunk, subchunk, aabbTmp, pos);
         }
 
         int[] handles = new int[4096];
@@ -147,7 +179,7 @@ public class Rapier {
             int handle = handleForStateId(stateId, world, pos, chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz,
                     aabbTmp);
             if (handle == 0) continue;
-            if (isOccluded(stateIds, world, pos, lx, ly, lz)) continue;
+            if (isOccluded(stateIds, world, plot, pos, lx, ly, lz)) continue;
             handles[i] = handle;
             count++;
         }
@@ -156,6 +188,7 @@ public class Rapier {
 
     private static int[] computeSubchunkColliderInfoSlow(
                                                          World world,
+                                                         @Nullable SubWorldPlot plot,
                                                          Chunk chunk,
                                                          ExtendedBlockStorage subchunk,
                                                          List<AxisAlignedBB> aabbTmp,
@@ -169,7 +202,8 @@ public class Rapier {
             for (int lz = 0; lz < 16; lz++) {
                 for (int lx = 0; lx < 16; lx++) {
                     pos.setPos(chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz);
-                    int handle = computeBlockColliderHandle(world, pos, aabbTmp, pos);
+                    int handle = plot == null ? computeBlockColliderHandle(world, pos, aabbTmp, pos) :
+                            computeBlockColliderHandle(world, plot, pos, aabbTmp, pos);
                     int index = ly << 8 | lz << 4 | lx;
                     handles[index] = handle;
                     if (handle != 0) count++;
@@ -214,27 +248,44 @@ public class Rapier {
         return f == 1;
     }
 
-    private static boolean isOccluded(int[] stateIds, World world, PooledMutableBlockPos pos, int lx, int ly, int lz) {
-        return fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, -1, 0, 0) &&
-                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 1, 0, 0) &&
-                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, -1, 0) &&
-                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, 1, 0) &&
-                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, 0, -1) &&
-                fullSolidNeighbor(stateIds, world, pos, lx, ly, lz, 0, 0, 1);
+    private static boolean isOccluded(int[] stateIds, World world, @Nullable SubWorldPlot plot,
+                                      PooledMutableBlockPos pos, int lx, int ly, int lz) {
+        return fullSolidNeighbor(stateIds, world, plot, pos, lx, ly, lz, -1, 0, 0) &&
+                fullSolidNeighbor(stateIds, world, plot, pos, lx, ly, lz, 1, 0, 0) &&
+                fullSolidNeighbor(stateIds, world, plot, pos, lx, ly, lz, 0, -1, 0) &&
+                fullSolidNeighbor(stateIds, world, plot, pos, lx, ly, lz, 0, 1, 0) &&
+                fullSolidNeighbor(stateIds, world, plot, pos, lx, ly, lz, 0, 0, -1) &&
+                fullSolidNeighbor(stateIds, world, plot, pos, lx, ly, lz, 0, 0, 1);
     }
 
-    private static boolean fullSolidNeighbor(int[] stateIds, World world, PooledMutableBlockPos pos, int lx, int ly,
+    private static boolean fullSolidNeighbor(int[] stateIds, World world, @Nullable SubWorldPlot plot,
+                                             PooledMutableBlockPos pos, int lx, int ly,
                                              int lz,
                                              int dx, int dy, int dz) {
         int nx = lx + dx;
         int ny = ly + dy;
         int nz = lz + dz;
         if (nx < 0 || nx > 15 || ny < 0 || ny > 15 || nz < 0 || nz > 15) {
-            pos.setPos(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
-            return isFullSolidStateId(Block.getStateId(world.getBlockState(pos)));
+            return isFullSolidNeighbor(world, plot, pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
         }
         return isFullSolidStateId(stateIds[ny << 8 | nz << 4 | nx]);
     }
+
+    private static boolean isFullSolidNeighbor(World world, @Nullable SubWorldPlot plot, int x, int y, int z) {
+        if (y < 0 || y >= 256) return false;
+        IBlockState state;
+        if (plot != null) {
+            Chunk chunk = SubWorldRegistry.peekPlotChunk(world, x >> 4, z >> 4);
+            if (chunk == null) return false;
+            state = chunk.getBlockState(new BlockPos(x, y, z));
+        } else {
+            state = world.getBlockState(new BlockPos(x, y, z));
+        }
+        return isFullSolidStateId(Block.getStateId(state));
+    }
+
+    public static final int[][] BLOCK_CHANGE_OFFSETS = { { 0, 0, 0 }, { 1, 0, 0 }, { -1, 0, 0 },
+            { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
 
     public static void add_force_debug(
                                        AbstractPhysicsEntity entity, double fx, double fy, double fz) {
@@ -341,7 +392,7 @@ public class Rapier {
                                                  PooledMutableBlockPos tmpPos) {
         IBlockState state = world.getBlockState(pos);
         tmpPos.setPos(pos.getX(), pos.getY(), pos.getZ());
-        if (isOccluded(world, tmpPos)) return 0;
+        if (isOccluded(world, null, tmpPos)) return 0;
         return computeHandleNoOcclusion(world, tmpPos, pos.getX(), pos.getY(), pos.getZ(), state, aabbTmp);
     }
 
@@ -382,17 +433,21 @@ public class Rapier {
         return handle;
     }
 
-    private static boolean isOccluded(World world, BlockPos pos) {
-        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
-        return isFullSolidBlock(world, x - 1, y, z) && isFullSolidBlock(world, x + 1, y, z) &&
-                isFullSolidBlock(world, x, y - 1, z) && isFullSolidBlock(world, x, y + 1, z) &&
-                isFullSolidBlock(world, x, y, z - 1) && isFullSolidBlock(world, x, y, z + 1);
+    public static int computeBlockColliderHandle(World world, SubWorldPlot plot, BlockPos pos,
+                                                 List<AxisAlignedBB> aabbTmp, PooledMutableBlockPos tmpPos) {
+        Chunk chunk = SubWorldRegistry.peekPlotChunk(world, pos.getX() >> 4, pos.getZ() >> 4);
+        if (chunk == null) return 0;
+        IBlockState state = chunk.getBlockState(pos);
+        tmpPos.setPos(pos.getX(), pos.getY(), pos.getZ());
+        if (isOccluded(world, plot, tmpPos)) return 0;
+        return computeHandleNoOcclusion(world, tmpPos, pos.getX(), pos.getY(), pos.getZ(), state, aabbTmp);
     }
 
-    private static boolean isFullSolidBlock(World world, int x, int y, int z) {
-        if (y < 0 || y >= 256) return false;
-        IBlockState state = world.getBlockState(new BlockPos(x, y, z));
-        return state.isFullBlock() && state.isFullCube() && state.isOpaqueCube();
+    private static boolean isOccluded(World world, @Nullable SubWorldPlot plot, BlockPos pos) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        return isFullSolidNeighbor(world, plot, x - 1, y, z) && isFullSolidNeighbor(world, plot, x + 1, y, z) &&
+                isFullSolidNeighbor(world, plot, x, y - 1, z) && isFullSolidNeighbor(world, plot, x, y + 1, z) &&
+                isFullSolidNeighbor(world, plot, x, y, z - 1) && isFullSolidNeighbor(world, plot, x, y, z + 1);
     }
 
     private static double volume(AxisAlignedBB aabb) {
@@ -440,4 +495,103 @@ public class Rapier {
     private static native void destroyWorld(int dimension);
 
     private static native void reset();
+
+    public static boolean createChunkletBody(World world, int tag, double x, double y, double z, Quaternion rot) {
+        int id = worldId(world);
+        if (id < 0) return false;
+        return createChunkletBody(id, tag, x, y, z, rot.getW(), rot.getX(), rot.getY(), rot.getZ());
+    }
+
+    public static void addBodyChunk(World world, int tag, int lx, int ly, int lz, double ox, double oy,
+                                    double oz, int[] data) {
+        int id = worldId(world);
+        if (id < 0) return;
+        addBodyChunk(id, tag, lx, ly, lz, ox, oy, oz, data);
+    }
+
+    public static boolean updateBodyChunkBlock(World world, int tag, int lx, int ly, int lz, int x, int y,
+                                               int z, int newData) {
+        int id = worldId(world);
+        if (id < 0) return false;
+        return updateBodyChunkBlock(id, tag, lx, ly, lz, x, y, z, newData);
+    }
+
+    public static void removeBodyChunk(World world, int tag, int lx, int ly, int lz) {
+        int id = worldId(world);
+        if (id < 0) return;
+        removeBodyChunk(id, tag, lx, ly, lz);
+    }
+
+    public static void removeChunkletBody(World world, int tag) {
+        int id = worldId(world);
+        if (id < 0) return;
+        removeChunkletBody(id, tag);
+    }
+
+    public static void setChunkletBodyPose(World world, int tag, Vec3d pos, Quaternion rot, Vec3d vel) {
+        int id = worldId(world);
+        if (id < 0) return;
+        setChunkletBodyPose(id, tag, pos.x, pos.y, pos.z, rot.getW(), rot.getX(), rot.getY(), rot.getZ(),
+                vel.x, vel.y, vel.z);
+    }
+
+    public static double[] getChunkletBodyPose(World world, int tag) {
+        int id = worldId(world);
+        if (id < 0) return null;
+        getChunkletBodyPose(id, tag, bodyCache);
+        return bodyCache;
+    }
+
+    public static void applyImpulseAtPoint(World world, int tag, Vec3d point, Vec3d impulse) {
+        int id = worldId(world);
+        if (id < 0) return;
+        applyImpulseAtPoint(id, tag, point.x, point.y, point.z, impulse.x, impulse.y, impulse.z);
+    }
+
+    public static class RaycastHit {
+
+        public final double dist;
+        public final Vec3d normal;
+        public final int tag;
+
+        RaycastHit(double dist, Vec3d normal, int tag) {
+            this.dist = dist;
+            this.normal = normal;
+            this.tag = tag;
+        }
+    }
+
+    public static RaycastHit raycast(World world, Vec3d origin, Vec3d direction, double maxDistance) {
+        int id = worldId(world);
+        if (id < 0) return null;
+        long handle = castRay(id, origin.x, origin.y, origin.z, direction.x, direction.y, direction.z,
+                maxDistance, true, rayCache);
+        if (handle < 0) return null;
+        return new RaycastHit(rayCache[0], new Vec3d(rayCache[1], rayCache[2], rayCache[3]), (int) rayCache[4]);
+    }
+
+    private static native boolean createChunkletBody(int world_id, int tag, double x, double y, double z,
+                                                     double qw, double qx, double qy, double qz);
+
+    private static native void addBodyChunk(int world_id, int tag, int lx, int ly, int lz, double ox,
+                                            double oy, double oz, int[] data);
+
+    private static native boolean updateBodyChunkBlock(int world_id, int tag, int lx, int ly, int lz, int x,
+                                                       int y, int z, int new_data);
+
+    private static native void removeBodyChunk(int world_id, int tag, int lx, int ly, int lz);
+
+    private static native void removeChunkletBody(int world_id, int tag);
+
+    private static native void setChunkletBodyPose(int world_id, int tag, double x, double y, double z,
+                                                   double qw, double qx, double qy, double qz,
+                                                   double vx, double vy, double vz);
+
+    private static native void getChunkletBodyPose(int world_id, int tag, double[] out);
+
+    private static native void applyImpulseAtPoint(int world_id, int tag, double px, double py, double pz,
+                                                   double ix, double iy, double iz);
+
+    private static native long castRay(int world_id, double ox, double oy, double oz, double dx, double dy,
+                                       double dz, double max_toi, boolean solid, double[] out);
 }

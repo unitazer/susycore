@@ -1,5 +1,6 @@
 const RESIZE_FRACTION: f32 = 2.0;
 //octree mostly stolen from sable
+#[derive(Clone)]
 pub struct Octree {
   pub data: Vec<i32>,
   pub log2_size: u32,

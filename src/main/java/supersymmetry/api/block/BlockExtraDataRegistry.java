@@ -3,9 +3,9 @@ package supersymmetry.api.block;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.jetbrains.annotations.Nullable;
-
 import net.minecraft.block.Block;
+
+import org.jetbrains.annotations.Nullable;
 
 public final class BlockExtraDataRegistry {
 
@@ -17,8 +17,7 @@ public final class BlockExtraDataRegistry {
         HANDLERS.put(blockClass, handler);
     }
 
-    @Nullable
-    public static BlockExtraDataHandler get(Block block) {
+    @Nullable public static BlockExtraDataHandler get(Block block) {
         for (Class<?> c = block.getClass(); c != null && Block.class.isAssignableFrom(c); c = c.getSuperclass()) {
             BlockExtraDataHandler handler = HANDLERS.get(c);
             if (handler != null) {

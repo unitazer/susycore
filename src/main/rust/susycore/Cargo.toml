@@ -10,7 +10,6 @@ path = "src/lib.rs"
 
 [dependencies]
 color = "0.3.3"
-itertools = "0.15"
 jni = { workspace = true, features = ["invocation"] }
 log = "0.4"
 once_cell = "1.21.4"

@@ -1,11 +1,11 @@
 package supersymmetry.api.block;
 
-import org.jetbrains.annotations.Nullable;
-
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
+
+import org.jetbrains.annotations.Nullable;
 
 import gregtech.api.block.VariantActiveBlock;
 
@@ -16,8 +16,7 @@ public class VariantActiveBlockExtraDataHandler implements BlockExtraDataHandler
     private static final String ACTIVE = "active";
 
     @Override
-    @Nullable
-    public NBTTagCompound capture(World world, BlockPos pos, IBlockState state) {
+    @Nullable public NBTTagCompound capture(World world, BlockPos pos, IBlockState state) {
         if (VariantActiveBlock.isBlockActive(world.provider.getDimension(), pos)) {
             NBTTagCompound extra = new NBTTagCompound();
             extra.setBoolean(ACTIVE, true);

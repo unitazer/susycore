@@ -16,8 +16,7 @@ import supersymmetry.api.subworld.SubWorldContainerHolder;
 @Mixin(World.class)
 public abstract class WorldMixin implements SubWorldContainerHolder {
 
-    @Unique
-    private volatile SubWorldContainer susy$subWorldContainer;
+    @Unique private volatile SubWorldContainer susy$subWorldContainer;
 
     @Override
     public SubWorldContainer susy$getSubWorldContainer() {
