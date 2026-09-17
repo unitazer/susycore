@@ -1,12 +1,14 @@
 use rapier3d::math::Vec3;
 use rapier3d::prelude::{
-  ColliderBuilder, ColliderHandle, ColliderSet, IslandManager, RigidBodySet, SharedShape,
+  ActiveEvents, ColliderBuilder, ColliderHandle, ColliderSet, IslandManager, RigidBodySet,
+  SharedShape,
 };
 use std::collections::HashMap;
 
 use crate::Real;
 use crate::block_collisions::BlockColliderInfoHandle;
 use crate::chunklet::Chunklet;
+use crate::contact_forces::CONTACT_FORCE_EVENT_THRESHOLD;
 
 //the minecraft world is (6*10^7)^2 * 256 blocks which is ~60^2 so it can be packed
 #[derive(Debug, Hash, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
@@ -15,14 +17,22 @@ impl PackedChunkletCoords {
   //chunk space
   #[inline(always)]
   pub fn from_xyz(x: i32, y: u8, z: i32) -> Self {
-    assert!(x.abs() < (3_000_000 >> 4));
-    assert!(z.abs() < (3_000_000 >> 4));
+    Self::try_from_xyz(x, y as i32, z).expect("chunklet coords out of range")
+  }
+  #[inline(always)]
+  pub fn try_from_xyz(x: i32, y: i32, z: i32) -> Option<Self> {
+    if x.unsigned_abs() >= (3_000_000 >> 4)
+      || z.unsigned_abs() >= (3_000_000 >> 4)
+      || !(0..=u8::MAX as i32).contains(&y)
+    {
+      return None;
+    }
     let packed = ((x < 0) as u64) << 63
       | ((z < 0) as u64) << 62
       | (x.unsigned_abs() as u64) << 38
       | (z.unsigned_abs() as u64) << 13
       | y as u64;
-    Self(packed)
+    Some(Self(packed))
   }
   pub fn to_xyz(p: u64) -> (i32, u8, i32) {
     let y = p as u8;
@@ -84,7 +94,7 @@ impl TerrainData {
     bodies: &mut RigidBodySet,
   ) {
     let Some(handle) = self.collider_for(cx, cy, cz) else {
-      log::error!("no chunk at {cx} {cy} {cz}");
+      log::debug!("no chunk at {cx} {cy} {cz}");
       return;
     };
 
@@ -139,6 +149,8 @@ impl TerrainData {
           (y * 16) as Real,
           (z * 16) as Real,
         ))
+        .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
+        .contact_force_event_threshold(CONTACT_FORCE_EVENT_THRESHOLD)
         .build(),
     );
     self
@@ -179,6 +191,15 @@ mod tests {
   }
 
   const LIMIT: i32 = (3_000_000 >> 4) - 1;
+
+  #[test]
+  fn coords_out_of_range_rejected() {
+    assert!(PackedChunkletCoords::try_from_xyz(LIMIT + 1, 0, 0).is_none());
+    assert!(PackedChunkletCoords::try_from_xyz(0, 0, LIMIT + 1).is_none());
+    assert!(PackedChunkletCoords::try_from_xyz(0, -1, 0).is_none());
+    assert!(PackedChunkletCoords::try_from_xyz(0, 256, 0).is_none());
+    assert!(PackedChunkletCoords::try_from_xyz(0, 255, 0).is_some());
+  }
 
   #[test]
   fn coords_round_trip() {

@@ -14,8 +14,11 @@ import org.jetbrains.annotations.Nullable;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import supersymmetry.api.SusyLog;
 
 public final class SubWorldContainer {
+
+    public static final int GROW_MARGIN_CHUNKS = 1;
 
     private final World world;
     private final SubWorldAllocator allocator;
@@ -27,7 +30,7 @@ public final class SubWorldContainer {
     public SubWorldContainer(World world) {
         this.world = world;
         this.allocator = new SubWorldAllocator(SubWorldAllocator.HEAP_ORIGIN_CHUNK, SubWorldAllocator.HEAP_ORIGIN_CHUNK,
-                SubWorldAllocator.HEAP_SIZE_CHUNKS);
+                SubWorldAllocator.HEAP_SIZE_CHUNKS, SubWorldAllocator.HEAP_BORDER_CHUNKS);
     }
 
     public void attachSavedData(SubWorldAllocatorSavedData data) {
@@ -43,7 +46,38 @@ public final class SubWorldContainer {
     }
 
     @Nullable public SubWorldPlot getPlot(int chunkX, int chunkZ) {
-        return this.chunkToPlot.get(ChunkPos.asLong(chunkX, chunkZ));
+        SubWorldPlot mapped = this.chunkToPlot.get(ChunkPos.asLong(chunkX, chunkZ));
+        if (mapped != null && mapped.inBounds(chunkX, chunkZ)) {
+            return mapped;
+        }
+        return this.findNearestMarginPlot(chunkX, chunkZ);
+    }
+
+    @Nullable private SubWorldPlot findNearestMarginPlot(int chunkX, int chunkZ) {
+        SubWorldPlot nearest = null;
+        int nearestDistance = Integer.MAX_VALUE;
+        for (SubWorldPlot plot : this.allPlots) {
+            if (plot.inBounds(chunkX, chunkZ)) {
+                return plot;
+            }
+            SubWorldAllocator.Rect rect = plot.getRect();
+            int dx = Math.max(0, Math.max(rect.x - chunkX, chunkX - (rect.x + rect.w - 1)));
+            int dz = Math.max(0, Math.max(rect.z - chunkZ, chunkZ - (rect.z + rect.h - 1)));
+            int distance = Math.max(dx, dz);
+            if (distance > GROW_MARGIN_CHUNKS) {
+                continue;
+            }
+            if (nearest == null || distance < nearestDistance ||
+                    (distance == nearestDistance && precedes(rect, nearest.getRect()))) {
+                nearest = plot;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    private static boolean precedes(SubWorldAllocator.Rect a, SubWorldAllocator.Rect b) {
+        return a.x != b.x ? a.x < b.x : a.z < b.z;
     }
 
     public SubWorldPlot allocatePlot(int sizeChunksX, int sizeChunksZ) {
@@ -62,23 +96,18 @@ public final class SubWorldContainer {
             return;
         }
         this.allPlots.add(plot);
-        this.addPlotCells(plot);
+        this.addCells(plot);
     }
 
     public void remove(SubWorldPlot plot) {
         if (!this.allPlots.remove(plot)) {
             return;
         }
-        this.removePlotCells(plot);
+        this.removeCells(plot, plot.getRect());
     }
 
-    public void freePlot(SubWorldPlot plot) {
-        if (this.world.isRemote || !this.allPlots.contains(plot)) {
-            return;
-        }
-        plot.destroy();
-        this.allocator.free(plot.getRect());
-        this.onAllocatorChanged();
+    public boolean isPlotRectAllocated(SubWorldAllocator.Rect rect) {
+        return this.allocator.isAllocated(rect);
     }
 
     public void freeOwnedRect(SubWorldAllocator.Rect rect) {
@@ -90,26 +119,82 @@ public final class SubWorldContainer {
         }
     }
 
-    public SubWorldPlot growPlot(SubWorldPlot plot, int targetSizeX, int targetSizeZ) {
-        if (this.world.isRemote) {
-            return plot;
+    public boolean ensureCovered(SubWorldPlot plot, int chunkX, int chunkZ) {
+        if (this.world.isRemote || !this.allPlots.contains(plot)) {
+            return false;
         }
-        SubWorldAllocator.Rect grown = this.allocator.grow(plot.getRect(), targetSizeX, targetSizeZ);
-        this.onAllocatorChanged();
-        if (grown == plot.getRect()) {
-            this.reindex(plot);
-            return plot;
+        SubWorldAllocator.Rect rect = plot.getRect();
+        int west = Math.max(0, rect.x - chunkX);
+        int north = Math.max(0, rect.z - chunkZ);
+        int east = Math.max(0, chunkX - (rect.x + rect.w - 1));
+        int south = Math.max(0, chunkZ - (rect.z + rect.h - 1));
+        if (west == 0 && north == 0 && east == 0 && south == 0) {
+            return true;
         }
-        SubWorldPlot moved = this.relocate(plot, grown);
+        SubWorldAllocator.Rect oldBounds = rect.copy();
+        if (this.allocator.expand(rect, west, north, east, south)) {
+            SusyLog.logger.info("[susy-growth] plot {} grew in place: {} -> {}", plot, oldBounds, rect);
+            this.rebuildIndex(plot, oldBounds);
+            plot.seedLight();
+            this.onAllocatorChanged();
+            this.notifyGrowth(plot, plot, west * 16, north * 16, 0, 0);
+            return true;
+        }
+        SubWorldPlot moved = this.relocate(plot, chunkX, chunkZ, west, north, east, south);
+        if (moved == null) {
+            SusyLog.logger.warn("SubWorldContainer: failed to grow plot {} to cover chunk ({}, {})", plot, chunkX,
+                    chunkZ);
+            return false;
+        }
         this.onAllocatorChanged();
-        return moved;
+        SusyLog.logger.info("[susy-growth] plot {} grew by relocation: {} -> {}", plot, rect, moved.getRect());
+        moved.seedLight();
+        this.notifyGrowth(plot, moved, west * 16, north * 16, (moved.getOriginChunkX() + west - oldBounds.x) * 16,
+                (moved.getOriginChunkZ() + north - oldBounds.z) * 16);
+        return true;
     }
 
-    private SubWorldPlot relocate(SubWorldPlot plot, SubWorldAllocator.Rect newRect) {
-        int dx = newRect.x - plot.getOriginChunkX();
-        int dz = newRect.z - plot.getOriginChunkZ();
+    @Nullable private SubWorldPlot relocate(SubWorldPlot plot, int chunkX, int chunkZ, int west, int north, int east,
+                                  int south) {
+        SubWorldAllocator.Rect rect = plot.getRect();
+        int newW = rect.w + west + east;
+        int newH = rect.h + north + south;
+        if (!this.allocator.freeOwned(rect)) {
+            return null;
+        }
+        SubWorldAllocator.Rect target = this.allocator.allocateAt(rect.x - west, rect.z - north, newW, newH);
+        if (target == null) {
+            target = this.allocator.allocateContaining(newW, newH, chunkX, chunkZ);
+        }
+        if (target == null) {
+            try {
+                target = this.allocator.allocate(newW, newH);
+                SusyLog.logger.warn("SubWorldContainer: plot {} relocated to {} without preserving content heap coords",
+                        plot, target);
+            } catch (IllegalStateException e) {
+                target = null;
+            }
+        }
+        if (target == null) {
+            this.allocator.reoccupy(rect);
+            SusyLog.logger.warn("SubWorldContainer: no free space to relocate plot {} while growing to ({}, {})", plot,
+                    chunkX, chunkZ);
+            return null;
+        }
+        SubWorldAllocator.Rect oldBounds = rect.copy();
+        int dx = target.x + west - rect.x;
+        int dz = target.z + north - rect.z;
+        if (dx != 0 || dz != 0) {
+            SusyLog.logger.warn("SubWorldContainer: plot {} relocated to {} without preserving content heap coords",
+                    plot, target);
+        }
         plot.unregisterAllChunks();
-        SubWorldPlot moved = new SubWorldPlot(this.world, newRect);
+        SubWorldPlot moved = new SubWorldPlot(this.world, target);
+        moved.setGrowthListener(plot.getGrowthListener());
+        SubWorldRemovalReason pendingReason = this.pendingRemovals.remove(plot);
+        if (pendingReason != null) {
+            this.pendingRemovals.put(moved, pendingReason);
+        }
         for (Chunk old : plot.getLoadedChunks().values()) {
             int nx = old.x + dx;
             int nz = old.z + dz;
@@ -125,28 +210,50 @@ public final class SubWorldContainer {
         }
         plot.clearChunkTileEntities();
         plot.getLoadedChunks().clear();
-        this.allocator.free(plot.getRect());
-        this.remove(plot);
-        this.register(moved);
+        this.removeCells(plot, oldBounds);
+        this.allPlots.remove(plot);
+        this.allPlots.add(moved);
+        this.addCells(moved);
         return moved;
     }
 
-    private void reindex(SubWorldPlot plot) {
-        this.removePlotCells(plot);
-        this.addPlotCells(plot);
+    private void notifyGrowth(SubWorldPlot oldPlot, SubWorldPlot newPlot, int plotLocalShiftX, int plotLocalShiftZ,
+                              int heapShiftX, int heapShiftZ) {
+        SubWorldPlot.GrowthListener listener = oldPlot.getGrowthListener();
+        if (listener != null) {
+            listener.onPlotGrown(oldPlot, newPlot, plotLocalShiftX, plotLocalShiftZ, heapShiftX, heapShiftZ);
+        }
     }
 
-    private void addPlotCells(SubWorldPlot plot) {
-        for (int cx = plot.getOriginChunkX(); cx < plot.getOriginChunkX() + plot.getSizeChunksX(); cx++) {
-            for (int cz = plot.getOriginChunkZ(); cz < plot.getOriginChunkZ() + plot.getSizeChunksZ(); cz++) {
-                this.chunkToPlot.put(ChunkPos.asLong(cx, cz), plot);
+    private void rebuildIndex(SubWorldPlot plot, SubWorldAllocator.Rect oldBounds) {
+        this.removeCells(plot, oldBounds);
+        this.addCells(plot);
+    }
+
+    private void addCells(SubWorldPlot plot) {
+        SubWorldAllocator.Rect rect = plot.getRect();
+        int minX = rect.x - GROW_MARGIN_CHUNKS;
+        int minZ = rect.z - GROW_MARGIN_CHUNKS;
+        int maxX = rect.x + rect.w + GROW_MARGIN_CHUNKS;
+        int maxZ = rect.z + rect.h + GROW_MARGIN_CHUNKS;
+        for (int cx = minX; cx < maxX; cx++) {
+            for (int cz = minZ; cz < maxZ; cz++) {
+                long key = ChunkPos.asLong(cx, cz);
+                boolean inside = plot.inBounds(cx, cz);
+                if (inside || (!this.world.isRemote && !this.chunkToPlot.containsKey(key))) {
+                    this.chunkToPlot.put(key, plot);
+                }
             }
         }
     }
 
-    private void removePlotCells(SubWorldPlot plot) {
-        for (int cx = plot.getOriginChunkX(); cx < plot.getOriginChunkX() + plot.getSizeChunksX(); cx++) {
-            for (int cz = plot.getOriginChunkZ(); cz < plot.getOriginChunkZ() + plot.getSizeChunksZ(); cz++) {
+    private void removeCells(SubWorldPlot plot, SubWorldAllocator.Rect bounds) {
+        int minX = bounds.x - GROW_MARGIN_CHUNKS;
+        int minZ = bounds.z - GROW_MARGIN_CHUNKS;
+        int maxX = bounds.x + bounds.w + GROW_MARGIN_CHUNKS;
+        int maxZ = bounds.z + bounds.h + GROW_MARGIN_CHUNKS;
+        for (int cx = minX; cx < maxX; cx++) {
+            for (int cz = minZ; cz < maxZ; cz++) {
                 long key = ChunkPos.asLong(cx, cz);
                 if (this.chunkToPlot.get(key) == plot) {
                     this.chunkToPlot.remove(key);
@@ -167,7 +274,7 @@ public final class SubWorldContainer {
         }
     }
 
-    public void replace(SubWorldPlot plot, SubWorldRemovalReason reason) {
+    public void replace(SubWorldPlot plot) {
         this.pendingRemovals.remove(plot);
         this.remove(plot);
         plot.destroy();
@@ -184,9 +291,10 @@ public final class SubWorldContainer {
         boolean freed = false;
         for (Map.Entry<SubWorldPlot, SubWorldRemovalReason> entry : this.pendingRemovals.entrySet()) {
             SubWorldPlot plot = entry.getKey();
+            boolean stillOwned = this.allPlots.contains(plot);
             plot.destroy();
-            if (!this.world.isRemote && entry.getValue() == SubWorldRemovalReason.ENTITY_DEAD) {
-                this.allocator.free(plot.getRect());
+            if (!this.world.isRemote && entry.getValue() == SubWorldRemovalReason.ENTITY_DEAD && stillOwned) {
+                this.allocator.freeOwned(plot.getRect());
                 freed = true;
             }
         }

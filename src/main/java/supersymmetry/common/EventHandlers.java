@@ -42,6 +42,7 @@ import supersymmetry.Supersymmetry;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.items.CargoItemStackHandler;
 import supersymmetry.api.phys.ChunkSyncManager;
+import supersymmetry.api.phys.ContactForceHandler;
 import supersymmetry.api.phys.Rapier;
 import supersymmetry.api.space.dimension.WorldProviderSpace;
 import supersymmetry.common.entities.EntityDropPod;
@@ -140,13 +141,20 @@ public class EventHandlers {
         if (event.phase == TickEvent.Phase.END) {
             long start = System.nanoTime();
             ChunkSyncManager csm = chunkSyncManagers.get(world);
+            long sync = System.nanoTime();
             if (csm != null) {
                 csm.update();
             }
+            long stepped = System.nanoTime();
             Rapier.step_world(world);
-            double dt = (System.nanoTime() - start) / 1000000.0;
-            if (dt > 10) {
-                SusyLog.logger.warn(String.format("pstep took %.3f ms", dt));
+            long forces = System.nanoTime();
+            ContactForceHandler.onWorldTick(world);
+            long end = System.nanoTime();
+            double total = (end - start) / 1e6;
+            if (total > 10) {
+                SusyLog.logger.warn(String.format(
+                        "pstep took %.3f ms (chunkSync %.3f, rust step %.3f, contact forces %.3f)", total,
+                        (stepped - sync) / 1e6, (forces - stepped) / 1e6, (end - forces) / 1e6));
             }
         } else {
             return;

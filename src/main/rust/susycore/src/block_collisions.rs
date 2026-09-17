@@ -1,19 +1,18 @@
 use std::mem::{self};
 use std::num::NonZeroU32;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 use jni::EnvUnowned;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
-use jni::sys::{jdouble, jfloat, jint, jlong};
-use rapier3d::glamx::Quat;
-use rapier3d::math::{Pose, Vec3};
-use rapier3d::parry::bounding_volume::Aabb;
-use rapier3d::parry::shape::Cuboid;
-use rapier3d::prelude::{Collider, ColliderBuilder, QueryFilter, RigidBodyHandle, SharedShape};
+use jni::sys::{jdouble, jfloat, jint};
+use rapier3d::math::Vec3;
+use rapier3d::parry::bounding_volume::{Aabb, BoundingVolume};
+use rapier3d::prelude::{QueryFilter, RigidBodyHandle};
 
+use crate::Real;
 use crate::chunklet::Chunklet;
 use crate::scene::Scene;
-use crate::{IHateJava, Real};
+use crate::terrain::PackedChunkletCoords;
 //TODO callbacks
 
 pub static COLLIDERS: RwLock<ColliderStore> = RwLock::new(ColliderStore::new());
@@ -74,14 +73,6 @@ impl ColliderStore {
     debug_assert!(out != AIR_HANDLE);
     out
   }
-
-  pub fn len(&self) -> usize {
-    self.inner.len()
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self.inner.is_empty()
-  }
 }
 
 impl MinecraftBlockColliderInfo {
@@ -95,56 +86,9 @@ impl MinecraftBlockColliderInfo {
       boxes,
     }
   }
-  pub fn handle_deref<T>(
-    h: BlockColliderInfoHandle,
-    f: impl FnOnce(&MinecraftBlockColliderInfo) -> T,
-  ) -> Option<T> {
-    let colliders = COLLIDERS.read().expect("rust bug not mine");
-    colliders.get(h).map(f)
-  }
   pub fn handle(self) -> BlockColliderInfoHandle {
     let colliders = &mut *COLLIDERS.write().expect("rust bug not mine");
     colliders.find_or_insert(self)
-  }
-
-  //either a cuboid or a compound  shape, not for turning entire chunks into colliders but only a
-  //single one
-  pub fn into_collider(self) -> Collider {
-    if self.boxes.len() == 1 {
-      let aabb = &self.boxes[0];
-      let cuboid = Cuboid::new(aabb.half_extents());
-      let shape = SharedShape(Arc::new(cuboid));
-      Self::to_collider(shape, self.friction, self.restitution, self.density)
-    } else {
-      Self::to_collider(
-        Self::into_compound(self.boxes),
-        self.friction,
-        self.restitution,
-        self.density,
-      )
-    }
-  }
-
-  fn to_collider(shape: SharedShape, friction: Real, restitution: Real, density: Real) -> Collider {
-    ColliderBuilder::new(shape)
-      .friction(friction)
-      .restitution(restitution)
-      .density(density)
-      .build()
-  }
-  fn into_compound(boxes: Vec<Aabb>) -> SharedShape {
-    SharedShape::compound(
-      boxes
-        .into_iter()
-        .map(|x| {
-          let pose = Pose::from_parts(x.center(), Quat::IDENTITY);
-          (
-            pose,
-            SharedShape::cuboid(x.half_extents().x, x.half_extents().y, x.half_extents().z),
-          )
-        })
-        .collect(),
-    )
   }
 }
 #[unsafe(no_mangle)]
@@ -158,7 +102,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
   data: JIntArray,
 ) {
   debug_assert!((0..=16).contains(&y), "xyz: {x} {y} {z}");
-  // let mut buffer: [[i32; 4096]; 16] = [[0; 4096]; 16];
+  if PackedChunkletCoords::try_from_xyz(x, y, z).is_none() {
+    log::warn!("addChunk on out-of-range chunklet coords {x} {y} {z}");
+    return;
+  }
   let mut buffer: [i32; 4096] = [0; 4096];
   env
     .with_env(|env| -> Result<(), jni::errors::Error> {
@@ -180,30 +127,6 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addChunk(
   });
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_supersymmetry_api_phys_Rapier_RbInfo(
-  _env: EnvUnowned,
-  _class: JClass,
-  world_id: jint,
-  handle: jlong,
-) {
-  let handle = handle.collider_handle();
-
-  log::info!("handle:{handle:?}");
-  Scene::with_scene(world_id as usize, |xs| {
-    let c = xs.world.colliders.get(handle);
-    if let Some(collider) = c {
-      log::info!("collider obtained\nc:{collider:#?}");
-      if let Some(rb) = collider.parent().and_then(|x| xs.world.bodies.get(x)) {
-        log::info!(
-          "rb obtained from handle {:?}\nrb:{rb:#?}",
-          collider.parent()
-        );
-        log::info!("pos:{}", rb.position().translation);
-      }
-    }
-  });
-}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_initialize(
   _env: EnvUnowned,
@@ -298,6 +221,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunk(
     y,
     z
   );
+  if PackedChunkletCoords::try_from_xyz(x, y, z).is_none() {
+    log::warn!("removeChunk on out-of-range chunklet coords {x} {y} {z}");
+    return;
+  }
   Scene::with_scene_mut(world_id as usize, |xs| {
     xs.terrain.remove(
       x,
@@ -329,6 +256,14 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
   debug_assert!((0..16).contains(&y));
   debug_assert!((0..16).contains(&z));
   debug_assert!((0..16).contains(&cy));
+  if PackedChunkletCoords::try_from_xyz(cx, cy, cz).is_none() {
+    log::warn!("partialSubchunkUpdate on out-of-range chunk coords {cx} {cy} {cz}");
+    return;
+  }
+  if !(0..16).contains(&x) || !(0..16).contains(&y) || !(0..16).contains(&z) {
+    log::warn!("partialSubchunkUpdate on out-of-range block coords {x} {y} {z}");
+    return;
+  }
 
   Scene::with_scene_mut(world_id as usize, |xs| {
     xs.terrain.update(
@@ -348,6 +283,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
     let block_world_y = (cy * 16 + y) as f32;
     let block_world_z = (cz * 16 + z) as f32;
 
+    const WAKE_MARGIN: Real = 1.0;
     let block_aabb = Aabb::new(
       Vec3::new(block_world_x, block_world_y, block_world_z),
       Vec3::new(
@@ -355,7 +291,8 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
         block_world_y + 1.0,
         block_world_z + 1.0,
       ),
-    );
+    )
+    .loosened(WAKE_MARGIN);
 
     let query_pipeline = xs.world.broad_phase.as_query_pipeline(
       xs.world.narrow_phase.query_dispatcher(),

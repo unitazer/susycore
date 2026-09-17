@@ -32,7 +32,7 @@ import org.lwjgl.opengl.GL11;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import supersymmetry.api.phys.PhysicsWorldEntity;
-import supersymmetry.api.phys.Quaternion;
+import supersymmetry.api.phys.RigidPose;
 import supersymmetry.api.subworld.SubWorldPlot;
 import supersymmetry.api.util.SuSyUtility;
 import supersymmetry.mixins.minecraft.RenderGlobalAccessor;
@@ -85,14 +85,13 @@ public class SubWorldChunkRenderer {
 
     public BlockPos getProjectedCamera() {
         EntityPlayer player = Minecraft.getMinecraft().player;
+        double dx = player.lastTickPosX + (player.posX - player.lastTickPosX) * partialTicks;
+        double dy = player.lastTickPosY + (player.posY - player.lastTickPosY) * partialTicks;
+        double dz = player.lastTickPosZ + (player.posZ - player.lastTickPosZ) * partialTicks;
+        Vec3d plotLocal = entity.currentPose().plotLocalFromWorld(new Vec3d(dx, dy, dz));
         BlockPos origin = plot.getRenderOrigin();
-        double dx = player.lastTickPosX + (player.posX - player.lastTickPosX) * partialTicks - entity.posX;
-        double dy = player.lastTickPosY + (player.posY - player.lastTickPosY) * partialTicks - entity.posY;
-        double dz = player.lastTickPosZ + (player.posZ - player.lastTickPosZ) * partialTicks - entity.posZ;
-        Vec3d local = entity.getRotation().conjugate().rotatePoint(new Vec3d(dx, dy, dz));
-        Vec3d rp = entity.getRotationPoint();
-        return new BlockPos(origin.getX() + rp.x + local.x, origin.getY() + rp.y + local.y,
-                origin.getZ() + rp.z + local.z);
+        return new BlockPos(origin.getX() + plotLocal.x, origin.getY() + plotLocal.y,
+                origin.getZ() + plotLocal.z);
     }
 
     private void syncSections() {
@@ -175,24 +174,24 @@ public class SubWorldChunkRenderer {
         }
         BlockPos origin = plot.getRenderOrigin();
         Vec3d epos = interpPos(entity, partialTicks);
-        Quaternion q = entity.getRenderRotation(partialTicks);
-        Vec3d rp = entity.getRenderRotationPoint(partialTicks);
+        RigidPose pose = entity.renderPose(partialTicks);
         for (SubWorldRenderChunk rc : sections.values()) {
             CompiledChunk cc = rc.getCompiledChunk();
             if (cc == CompiledChunk.DUMMY || cc.isLayerEmpty(layer)) {
                 continue;
             }
             BlockPos sp = rc.getPosition();
-            if (frustum != null && !isInFrustum(sp, q, rp, epos, origin, frustum)) {
+            Vec3d sectionOffset = pose.bodyRelativeFromPlotLocal(
+                    new Vec3d(sp.getX() - origin.getX(), sp.getY() - origin.getY(), sp.getZ() - origin.getZ()));
+            if (frustum != null && !isInFrustum(sectionOffset, pose, epos, frustum)) {
                 continue;
             }
             GlStateManager.pushMatrix();
             if (cam != null) {
                 GlStateManager.translate(epos.x - cam.x, epos.y - cam.y, epos.z - cam.z);
             }
-            GlStateManager.rotate(q.toLWJGL());
-            GlStateManager.translate(sp.getX() - origin.getX() - rp.x, sp.getY() - origin.getY() - rp.y,
-                    sp.getZ() - origin.getZ() - rp.z);
+            GlStateManager.rotate(pose.rotation.toLWJGL());
+            GlStateManager.translate(sectionOffset.x, sectionOffset.y, sectionOffset.z);
             VertexBuffer vb = rc.getVertexBufferByLayer(layer.ordinal());
             vb.bindBuffer();
             setupArrayPointers();
@@ -202,11 +201,10 @@ public class SubWorldChunkRenderer {
         OpenGlHelper.glBindBuffer(OpenGlHelper.GL_ARRAY_BUFFER, 0);
     }
 
-    private boolean isInFrustum(BlockPos sp, Quaternion q, Vec3d rp, Vec3d epos, BlockPos origin, Frustum frustum) {
-        double sx = sp.getX() - origin.getX() - rp.x;
-        double sy = sp.getY() - origin.getY() - rp.y;
-        double sz = sp.getZ() - origin.getZ() - rp.z;
-        AxisAlignedBB rotated = q.rotateAABB(new AxisAlignedBB(sx, sy, sz, sx + 16, sy + 16, sz + 16))
+    private boolean isInFrustum(Vec3d sectionOffset, RigidPose pose, Vec3d epos, Frustum frustum) {
+        AxisAlignedBB rotated = pose.rotation
+                .rotateAABB(new AxisAlignedBB(sectionOffset.x, sectionOffset.y, sectionOffset.z, sectionOffset.x + 16,
+                        sectionOffset.y + 16, sectionOffset.z + 16))
                 .offset(epos.x, epos.y, epos.z);
         return frustum.isBoundingBoxInFrustum(rotated);
     }
@@ -229,13 +227,11 @@ public class SubWorldChunkRenderer {
     private void renderBlockEntities(float partialTicks) {
         RenderHelper.enableStandardItemLighting();
         TileEntityRendererDispatcher dispatcher = TileEntityRendererDispatcher.instance;
-        Quaternion q = entity.getRenderRotation(partialTicks);
-        Vec3d rp = entity.getRenderRotationPoint(partialTicks);
+        RigidPose pose = entity.renderPose(partialTicks);
         for (SubWorldRenderChunk rc : sections.values()) {
             for (TileEntity te : rc.getCompiledChunk().getTileEntities()) {
-                BlockPos local = plot.toLocal(te.getPos());
-                Vec3d rotated = q.rotatePoint(new Vec3d(local.getX() - rp.x, local.getY() - rp.y, local.getZ() - rp.z));
-                dispatcher.render(te, rotated.x, rotated.y, rotated.z, partialTicks, 0, 1.0F);
+                Vec3d offset = pose.worldFromPlotLocal(new Vec3d(plot.toLocal(te.getPos()))).subtract(pose.position);
+                dispatcher.render(te, offset.x, offset.y, offset.z, partialTicks, 0, 1.0F);
             }
         }
         RenderHelper.disableStandardItemLighting();

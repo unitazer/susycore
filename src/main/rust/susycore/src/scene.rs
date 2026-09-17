@@ -12,7 +12,9 @@ use rapier3d::prelude::*;
 
 use crate::body::{BodyEntry, EntityId};
 use crate::chunklet::Chunklet;
+use crate::contact_forces::ContactForceRecord;
 use crate::dispatcher::ChunkletDispatcher;
+use crate::joint::{JointId, JointRecord};
 use crate::terrain::TerrainData;
 use crate::{IHateJava, JResult};
 
@@ -24,6 +26,9 @@ pub struct Scene {
   pub gravity: Vec3,
   pub chunklet_bodies: HashMap<EntityId, BodyEntry>,
   pub collider_owners: HashMap<ColliderHandle, EntityId>,
+  pub joints: HashMap<JointId, JointRecord>,
+  pub next_joint_id: u32,
+  pub pending_contact_forces: Vec<ContactForceRecord>,
 }
 //TODO maybe there is a less stupid way of storing these?
 static SCENES: LazyLock<Mutex<Vec<Scene>>> = LazyLock::new(|| Mutex::new(Vec::new()));
@@ -73,7 +78,7 @@ impl Scene {
       } else if dim == x.len() {
         x.push(Self::new(gravity));
       } else {
-        panic!("dimension out of sequence");
+        log::warn!("dimension {dim} is out of sequence, scene not initialized");
       }
     });
   }
@@ -101,6 +106,7 @@ impl Scene {
         num_solver_iterations: 5,
         max_ccd_substeps: 5,
         friction_model: FrictionModel::Simplified,
+        contact_clustering: false,
         ..Default::default()
       },
       narrow_phase: NarrowPhase::with_query_dispatcher(
@@ -115,6 +121,9 @@ impl Scene {
       terrain,
       chunklet_bodies: HashMap::new(),
       collider_owners: HashMap::new(),
+      joints: HashMap::new(),
+      next_joint_id: 1,
+      pending_contact_forces: Vec::new(),
     }
   }
 }
@@ -173,7 +182,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addEntity(
   _indicies: JIntArray,
 ) -> jlong {
   debug_assert!(world_id >= 0);
-  assert!(shape_type >= 0 && shape_type <= ShapeType::Custom as i32);
+  if !(0..=ShapeType::Custom as i32).contains(&shape_type) {
+    log::warn!("addEntity on invalid shape type {shape_type}");
+    return 0;
+  }
   //TODO dont do this
   let shape_type: ShapeType = unsafe { mem::transmute(shape_type as u8) };
 
@@ -190,26 +202,15 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addEntity(
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
   let shape = match shape_type {
-    ShapeType::Ball => SharedShape::ball(data[0]),
-    ShapeType::Cuboid => SharedShape::cuboid(data[0], data[1], data[2]),
-    ShapeType::Capsule => todo!(),
-    ShapeType::Segment => todo!(),
-    ShapeType::Triangle => todo!(),
-    ShapeType::Voxels => todo!(),
-    ShapeType::TriMesh => todo!(),
-    ShapeType::Polyline => todo!(),
-    ShapeType::HalfSpace => todo!(),
-    ShapeType::HeightField => todo!(),
-    ShapeType::Compound => todo!(),
-    ShapeType::ConvexPolyhedron => todo!(),
-    ShapeType::Cylinder => todo!(),
-    ShapeType::Cone => todo!(),
-    ShapeType::RoundCuboid => todo!(),
-    ShapeType::RoundTriangle => todo!(),
-    ShapeType::RoundCylinder => todo!(),
-    ShapeType::RoundCone => todo!(),
-    ShapeType::RoundConvexPolyhedron => todo!(),
-    ShapeType::Custom => todo!(),
+    ShapeType::Ball if !data.is_empty() => SharedShape::ball(data[0]),
+    ShapeType::Cuboid if data.len() >= 3 => SharedShape::cuboid(data[0], data[1], data[2]),
+    _ => {
+      log::warn!(
+        "addEntity on unsupported shape type {shape_type:?} with {} floats",
+        data.len()
+      );
+      return 0;
+    }
   };
   let collider = ColliderBuilder::new(shape)
     .restitution(restitution as Real)
@@ -222,7 +223,13 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addEntity(
       .colliders
       .insert_with_parent(collider, rb_handle, &mut x.world.bodies)
   });
-  super::jlong_handle(handle.expect("invalid world id"))
+  match handle {
+    Some(handle) => super::jlong_handle(handle),
+    None => {
+      log::warn!("addEntity on missing world {world_id}");
+      0
+    }
+  }
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addForceDebug(
@@ -305,6 +312,6 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_step(
   world_id: jint,
 ) {
   Scene::with_scene_mut(world_id as usize, |x| {
-    x.world.step_with_events(&(), &());
+    x.step();
   });
 }

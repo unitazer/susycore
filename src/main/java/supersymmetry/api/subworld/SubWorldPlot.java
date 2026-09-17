@@ -19,15 +19,24 @@ import org.jetbrains.annotations.Nullable;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import supersymmetry.api.SusyLog;
+import supersymmetry.client.subworld.SubworldClientChunks;
 import supersymmetry.mixins.minecraft.ChunkAccessor;
 
 public class SubWorldPlot {
 
     public static final int RENDER_ORIGIN_Y = 127;
 
+    public interface GrowthListener {
+
+        void onPlotGrown(SubWorldPlot oldPlot, SubWorldPlot newPlot, int plotLocalShiftX, int plotLocalShiftZ,
+                         int heapShiftX, int heapShiftZ);
+    }
+
     private final World world;
     private final SubWorldAllocator.Rect rect;
     private final Long2ObjectMap<Chunk> chunks = new Long2ObjectOpenHashMap<>();
+    @Nullable private GrowthListener growthListener;
 
     public SubWorldPlot(World world, int originChunkX, int originChunkZ, int sizeChunksX, int sizeChunksZ) {
         this(world, new SubWorldAllocator.Rect(originChunkX, originChunkZ, sizeChunksX, sizeChunksZ));
@@ -35,7 +44,7 @@ public class SubWorldPlot {
 
     public SubWorldPlot(World world, SubWorldAllocator.Rect rect) {
         this.world = world;
-        this.rect = rect;
+        this.rect = rect.copy();
     }
 
     public static SubWorldPlot create(World world, int sizeChunksX, int sizeChunksZ) {
@@ -75,40 +84,75 @@ public class SubWorldPlot {
     }
 
     public Chunk getChunk(int chunkX, int chunkZ) {
-        if (!inBounds(chunkX, chunkZ)) {
+        return this.resolveChunk(chunkX, chunkZ);
+    }
+
+    @Nullable private Chunk resolveChunk(int chunkX, int chunkZ) {
+        if (inBounds(chunkX, chunkZ)) {
+            return this.chunkFor(chunkX, chunkZ);
+        }
+        if (world.isRemote) {
             return null;
         }
+        SubWorldContainer container = SubWorldContainer.getContainer(world);
+        if (container == null) {
+            return null;
+        }
+        int margin = SubWorldContainer.GROW_MARGIN_CHUNKS;
+        if (chunkX < rect.x - margin || chunkX >= rect.x + rect.w + margin || chunkZ < rect.z - margin ||
+                chunkZ >= rect.z + rect.h + margin) {
+            return null;
+        }
+        if (!container.ensureCovered(this, chunkX, chunkZ)) {
+            return null;
+        }
+        SubWorldPlot owner = container.getPlot(chunkX, chunkZ);
+        if (owner == null || !owner.inBounds(chunkX, chunkZ)) {
+            SusyLog.logger.warn("SubWorldPlot: growth of {} did not claim chunk ({}, {})", this, chunkX, chunkZ);
+            return null;
+        }
+        return owner.chunkFor(chunkX, chunkZ);
+    }
+
+    private Chunk chunkFor(int chunkX, int chunkZ) {
         long key = ChunkPos.asLong(chunkX, chunkZ);
         Chunk chunk = chunks.get(key);
         if (chunk == null) {
             chunk = new Chunk(world, chunkX, chunkZ);
             Arrays.fill(chunk.getBiomeArray(), (byte) Biome.getIdForBiome(Biomes.VOID));
             chunks.put(key, chunk);
-            registerChunkOnServer(chunk);
+            registerChunkOnProvider(chunk);
         }
         return chunk;
     }
 
-    private void registerChunkOnServer(Chunk chunk) {
-        if (world.isRemote) {
-            return;
-        }
-        if (world.getChunkProvider() instanceof ChunkProviderServer) {
-            ChunkProviderServer provider = (ChunkProviderServer) world.getChunkProvider();
-            provider.loadedChunks.put(ChunkPos.asLong(chunk.x, chunk.z), chunk);
-            ((ChunkAccessor) chunk).setLoaded(true);
-        }
+    @Nullable public GrowthListener getGrowthListener() {
+        return growthListener;
     }
 
-    private void unregisterChunkFromServer(Chunk chunk) {
+    public void setGrowthListener(@Nullable GrowthListener growthListener) {
+        this.growthListener = growthListener;
+    }
+
+    private void registerChunkOnProvider(Chunk chunk) {
+        SubWorldVoidChunks.invalidate(world, chunk.x, chunk.z);
         if (world.isRemote) {
-            return;
+            SubworldClientChunks.register(world, chunk);
+        } else if (world.getChunkProvider() instanceof ChunkProviderServer) {
+            ChunkProviderServer provider = (ChunkProviderServer) world.getChunkProvider();
+            provider.loadedChunks.put(ChunkPos.asLong(chunk.x, chunk.z), chunk);
         }
-        if (world.getChunkProvider() instanceof ChunkProviderServer) {
+        ((ChunkAccessor) chunk).setLoaded(true);
+    }
+
+    private void unregisterChunkFromProvider(Chunk chunk) {
+        if (world.isRemote) {
+            SubworldClientChunks.unregister(world, chunk);
+        } else if (world.getChunkProvider() instanceof ChunkProviderServer) {
             ChunkProviderServer provider = (ChunkProviderServer) world.getChunkProvider();
             provider.loadedChunks.remove(ChunkPos.asLong(chunk.x, chunk.z));
-            ((ChunkAccessor) chunk).setLoaded(false);
         }
+        ((ChunkAccessor) chunk).setLoaded(false);
     }
 
     @Nullable public Chunk getLoadedChunk(int chunkX, int chunkZ) {
@@ -136,6 +180,7 @@ public class SubWorldPlot {
     }
 
     public TileEntity setBlockState(BlockPos pos, IBlockState state, @Nullable NBTTagCompound tileNbt) {
+        IBlockState newState = state == null ? Blocks.AIR.getDefaultState() : state;
         Chunk chunk = getChunk(pos.getX() >> 4, pos.getZ() >> 4);
         if (chunk == null) {
             return null;
@@ -145,25 +190,33 @@ public class SubWorldPlot {
         if (sy < 0 || sy >= storages.length) {
             return null;
         }
+        IBlockState oldState = chunk.getBlockState(pos);
+        TileEntity previous = chunk.getTileEntity(pos, Chunk.EnumCreateEntityType.CHECK);
         if (storages[sy] == null) {
             storages[sy] = new ExtendedBlockStorage(sy << 4, world.provider.hasSkyLight());
         }
-        storages[sy].set(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15, state);
+        storages[sy].set(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15, newState);
         chunk.setModified(true);
 
-        if (state == null || !state.getBlock().hasTileEntity(state)) {
+        if (previous != null && previous.shouldRefresh(world, pos, oldState, newState)) {
+            chunk.removeTileEntity(pos);
+            ((ChunkAccessor) chunk).getTileEntityMap().remove(pos);
+            world.markTileEntityForRemoval(previous);
+        }
+
+        if (!newState.getBlock().hasTileEntity(newState)) {
             return null;
         }
         TileEntity te = chunk.getTileEntity(pos, Chunk.EnumCreateEntityType.CHECK);
         if (te == null) {
-            te = state.getBlock().createTileEntity(world, state);
+            te = newState.getBlock().createTileEntity(world, newState);
             chunk.addTileEntity(pos, te);
         }
         if (tileNbt != null) {
             te.readFromNBT(tileNbt);
         }
         te.setPos(pos);
-        if (!world.isRemote && !world.loadedTileEntityList.contains(te)) {
+        if (!world.loadedTileEntityList.contains(te)) {
             world.addTileEntity(te);
         }
         return te;
@@ -180,7 +233,7 @@ public class SubWorldPlot {
 
     public void unregisterAllChunks() {
         for (Chunk chunk : chunks.values()) {
-            unregisterChunkFromServer(chunk);
+            unregisterChunkFromProvider(chunk);
         }
     }
 
@@ -214,7 +267,7 @@ public class SubWorldPlot {
             for (TileEntity te : chunk.getTileEntityMap().values()) {
                 world.markTileEntityForRemoval(te);
             }
-            unregisterChunkFromServer(chunk);
+            unregisterChunkFromProvider(chunk);
         }
         chunks.clear();
         SubWorldRegistry.unregister(this);

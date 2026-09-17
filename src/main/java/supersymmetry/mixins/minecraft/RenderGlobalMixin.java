@@ -1,12 +1,20 @@
 package supersymmetry.mixins.minecraft;
 
+import net.minecraft.block.material.Material;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.util.math.AxisAlignedBB;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.RayTraceResult;
 import net.minecraftforge.client.MinecraftForgeClient;
 
 import org.spongepowered.asm.mixin.Mixin;
@@ -18,6 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import cam72cam.mod.entity.ModdedEntity;
+import supersymmetry.api.phys.PlotInteraction;
 import supersymmetry.client.renderer.handler.IAlwaysRender;
 import supersymmetry.client.renderer.subworld.SubWorldChunkRenderer;
 
@@ -118,5 +127,49 @@ public class RenderGlobalMixin {
     public void susy$markSubWorldSectionsForUpdate(int x1, int y1, int z1, int x2, int y2, int z2,
                                                    CallbackInfo ci) {
         SubWorldChunkRenderer.markRangeDirty(this.world, x1, y1, z1, x2, y2, z2);
+    }
+
+    @Inject(method = "drawSelectionBox", at = @At("HEAD"), cancellable = true)
+    public void susy$drawPlotSelectionBox(EntityPlayer player, RayTraceResult target, int execute, float partialTicks,
+                                          CallbackInfo ci) {
+        if (execute != 0 || target == null || target.typeOfHit != RayTraceResult.Type.BLOCK) {
+            return;
+        }
+        PlotInteraction.PlotHit hit = PlotInteraction.lastHit();
+        if (hit == null || target != hit.hit) {
+            return;
+        }
+        var body = hit.body;
+        var plot = body.getPlot();
+        if (plot == null) {
+            return;
+        }
+        BlockPos heapPos = target.getBlockPos();
+        IBlockState state = body.world.getBlockState(heapPos);
+        if (state.getMaterial() == Material.AIR || !body.world.getWorldBorder().contains(heapPos)) {
+            ci.cancel();
+            return;
+        }
+        BlockPos renderOrigin = plot.getRenderOrigin();
+        AxisAlignedBB plotLocalBox = state.getSelectedBoundingBox(body.world, heapPos)
+                .grow(0.0020000000949949026D)
+                .offset(-renderOrigin.getX(), -renderOrigin.getY(), -renderOrigin.getZ());
+        double camX = player.lastTickPosX + (player.posX - player.lastTickPosX) * partialTicks;
+        double camY = player.lastTickPosY + (player.posY - player.lastTickPosY) * partialTicks;
+        double camZ = player.lastTickPosZ + (player.posZ - player.lastTickPosZ) * partialTicks;
+        AxisAlignedBB box = body.renderPose(partialTicks).worldBoxFromPlotLocal(plotLocalBox)
+                .offset(-camX, -camY, -camZ);
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA,
+                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA, GlStateManager.SourceFactor.ONE,
+                GlStateManager.DestFactor.ZERO);
+        GlStateManager.glLineWidth(2.0F);
+        GlStateManager.disableTexture2D();
+        GlStateManager.depthMask(false);
+        RenderGlobal.drawSelectionBoundingBox(box, 0.0F, 0.0F, 0.0F, 0.4F);
+        GlStateManager.depthMask(true);
+        GlStateManager.enableTexture2D();
+        GlStateManager.disableBlend();
+        ci.cancel();
     }
 }

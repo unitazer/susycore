@@ -320,6 +320,8 @@ public class SuSyMetaTileEntities {
     public static MetaTileEntityCargoDronePad CARGO_DRONE_PAD;
 
     public static TestingMTE TEST;
+    public static TestingBarrelMTE TEST_BARREL;
+    public static TurretFoundationMTE TEST_TURRET;
     public static MetaTileEntityLargeRES LARGE_RES;
     public static MetaTileEntityLayupMachine LAYUP_MACHINE;
 
@@ -742,6 +744,8 @@ public class SuSyMetaTileEntities {
         REDSTONE_CONTROLLER = registerMetaTileEntity(18062,
                 new MetaTileEntityComponentRedstoneController(susyId("redstone_controller")));
         TEST = registerMetaTileEntity(18063, new TestingMTE(susyId("testing_mte")));
+        TEST_BARREL = registerMetaTileEntity(18064, new TestingBarrelMTE(susyId("testing_barrel")));
+        TEST_TURRET = registerMetaTileEntity(18065, new TurretFoundationMTE(susyId("test_turret")));
 
         INJECTION_MOLDER = registerMetaTileEntity(18110, new MetaTileEntityInjectionMolder(susyId("injection_molder")));
 

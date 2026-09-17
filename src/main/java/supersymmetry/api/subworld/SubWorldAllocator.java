@@ -3,10 +3,19 @@ package supersymmetry.api.subworld;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.jetbrains.annotations.Nullable;
+
 public final class SubWorldAllocator {
 
     public static final int HEAP_SIZE_CHUNKS = 4096;
     public static final int HEAP_ORIGIN_CHUNK = 1870848;
+    public static final int HEAP_BORDER_CHUNKS = 8;
+
+    public static boolean isInHeapRegion(int chunkX, int chunkZ) {
+        int min = HEAP_ORIGIN_CHUNK - HEAP_BORDER_CHUNKS;
+        int max = HEAP_ORIGIN_CHUNK + HEAP_SIZE_CHUNKS;
+        return chunkX >= min && chunkX < max && chunkZ >= min && chunkZ < max;
+    }
 
     public static final class Rect {
 
@@ -60,21 +69,40 @@ public final class SubWorldAllocator {
     private final int heapMinX;
     private final int heapMinZ;
     private final int heapSize;
+    private final int border;
+    private final int mainMinX;
+    private final int mainMinZ;
     private final List<Rect> freeRects = new ArrayList<>();
     private final List<Rect> allocatedRects = new ArrayList<>();
 
-    public SubWorldAllocator(int heapMinX, int heapMinZ, int heapSize) {
-        this.heapMinX = heapMinX;
-        this.heapMinZ = heapMinZ;
-        this.heapSize = heapSize;
-        this.freeRects.add(new Rect(heapMinX, heapMinZ, heapSize, heapSize));
+    public SubWorldAllocator(int mainMinX, int mainMinZ, int mainSize, int border) {
+        this.heapMinX = mainMinX - border;
+        this.heapMinZ = mainMinZ - border;
+        this.heapSize = mainSize + border;
+        this.border = border;
+        this.mainMinX = mainMinX;
+        this.mainMinZ = mainMinZ;
+        seedFreeRects();
+    }
+
+    private void seedFreeRects() {
+        this.freeRects.clear();
+        this.freeRects.add(new Rect(this.mainMinX, this.mainMinZ,
+                this.heapSize - this.border, this.heapSize - this.border));
+        if (this.border > 0) {
+            this.freeRects.add(new Rect(this.heapMinX, this.heapMinZ, this.heapSize, this.border));
+            this.freeRects.add(new Rect(this.heapMinX, this.mainMinZ, this.border,
+                    this.heapSize - this.border));
+        }
     }
 
     public void rebuildFromSaved(List<Rect> allocated) {
-        this.freeRects.clear();
+        seedFreeRects();
         this.allocatedRects.clear();
-        this.freeRects.add(new Rect(this.heapMinX, this.heapMinZ, this.heapSize, this.heapSize));
         for (Rect rect : allocated) {
+            if (rect.w <= 0 || rect.h <= 0) {
+                throw new IllegalArgumentException("Saved rect must be positive: " + rect);
+            }
             if (rect.x < this.heapMinX || rect.z < this.heapMinZ || rect.x + rect.w > this.heapMinX + this.heapSize ||
                     rect.z + rect.h > this.heapMinZ + this.heapSize) {
                 throw new IllegalArgumentException("Saved rect out of heap bounds: " + rect);
@@ -94,6 +122,10 @@ public final class SubWorldAllocator {
         this.allocatedRects.add(rect.copy());
     }
 
+    public void reoccupy(Rect rect) {
+        this.occupy(rect);
+    }
+
     public List<Rect> getAllocatedRects() {
         return this.allocatedRects;
     }
@@ -102,35 +134,84 @@ public final class SubWorldAllocator {
         if (w <= 0 || h <= 0) {
             throw new IllegalArgumentException("Allocator request must be positive: " + w + "x" + h);
         }
-        Rect fit = null;
         for (Rect free : this.freeRects) {
-            if (free.w >= w && free.h >= h) {
-                fit = free;
-                break;
+            if (hostsInMainRegion(free, w, h)) {
+                return this.take(free, Math.max(free.x, this.mainMinX), Math.max(free.z, this.mainMinZ), w, h);
             }
         }
-        if (fit == null) {
-            throw new IllegalStateException("Sub-world allocator is out of space");
+        for (Rect free : this.freeRects) {
+            if (free.w >= w && free.h >= h) {
+                return this.take(free, free.x, free.z, w, h);
+            }
         }
-        Rect alloc = new Rect(fit.x, fit.z, w, h);
-        this.freeRects.remove(fit);
-        if (fit.w > w) {
-            this.freeRects.add(new Rect(fit.x + w, fit.z, fit.w - w, fit.h));
-        }
-        if (fit.h > h) {
-            this.freeRects.add(new Rect(fit.x, fit.z + h, w, fit.h - h));
-        }
-        this.allocatedRects.add(alloc);
-        this.coalesce();
-        return alloc;
+        throw new IllegalStateException("Sub-world allocator is out of space");
     }
 
-    public void free(Rect rect) {
-        if (!this.allocatedRects.remove(rect)) {
-            throw new IllegalArgumentException("Rect is not allocated: " + rect);
+    private boolean hostsInMainRegion(Rect free, int w, int h) {
+        return free.w >= w && free.h >= h && free.x + free.w > this.mainMinX && free.z + free.h > this.mainMinZ &&
+                Math.max(free.x, this.mainMinX) + w <= free.x + free.w &&
+                Math.max(free.z, this.mainMinZ) + h <= free.z + free.h;
+    }
+
+    @Nullable public Rect allocateContaining(int w, int h, int chunkX, int chunkZ) {
+        if (w <= 0 || h <= 0) {
+            throw new IllegalArgumentException("Allocator request must be positive: " + w + "x" + h);
         }
-        this.freeRects.add(rect.copy());
+        for (Rect free : this.freeRects) {
+            if (free.w < w || free.h < h) {
+                continue;
+            }
+            int ox = Math.max(free.x, Math.min(free.x + free.w - w, chunkX - w + 1));
+            int oz = Math.max(free.z, Math.min(free.z + free.h - h, chunkZ - h + 1));
+            if (chunkX >= ox && chunkX < ox + w && chunkZ >= oz && chunkZ < oz + h) {
+                return this.take(free, ox, oz, w, h);
+            }
+        }
+        return null;
+    }
+
+    @Nullable public Rect allocateAt(int x, int z, int w, int h) {
+        if (w <= 0 || h <= 0) {
+            throw new IllegalArgumentException("Allocator request must be positive: " + w + "x" + h);
+        }
+        if (x < this.heapMinX || z < this.heapMinZ || x + w > this.heapMinX + this.heapSize ||
+                z + h > this.heapMinZ + this.heapSize) {
+            return null;
+        }
+        Rect spot = new Rect(x, z, w, h);
+        for (Rect other : this.allocatedRects) {
+            if (other.intersects(spot)) {
+                return null;
+            }
+        }
+        this.carve(spot);
+        this.allocatedRects.add(spot);
         this.coalesce();
+        return spot.copy();
+    }
+
+    private Rect take(Rect free, int ox, int oz, int w, int h) {
+        this.freeRects.remove(free);
+        if (ox > free.x) {
+            this.freeRects.add(new Rect(free.x, free.z, ox - free.x, free.h));
+        }
+        if (free.x + free.w > ox + w) {
+            this.freeRects.add(new Rect(ox + w, free.z, free.x + free.w - ox - w, free.h));
+        }
+        if (oz > free.z) {
+            this.freeRects.add(new Rect(ox, free.z, w, oz - free.z));
+        }
+        if (free.z + free.h > oz + h) {
+            this.freeRects.add(new Rect(ox, oz + h, w, free.z + free.h - oz - h));
+        }
+        Rect alloc = new Rect(ox, oz, w, h);
+        this.allocatedRects.add(alloc);
+        this.coalesce();
+        return alloc.copy();
+    }
+
+    public boolean isAllocated(Rect rect) {
+        return this.allocatedRects.contains(rect);
     }
 
     public boolean freeOwned(Rect rect) {
@@ -146,40 +227,44 @@ public final class SubWorldAllocator {
         return false;
     }
 
-    public Rect extendInPlace(Rect rect, int targetW, int targetH) {
-        int newW = Math.max(targetW, rect.w);
-        int newH = Math.max(targetH, rect.h);
-        if (newW <= rect.w && newH <= rect.h) {
-            return rect;
+    public boolean expand(Rect rect, int west, int north, int east, int south) {
+        if (west < 0 || north < 0 || east < 0 || south < 0) {
+            return false;
         }
-        if (rect.x + newW > this.heapMinX + this.heapSize || rect.z + newH > this.heapMinZ + this.heapSize) {
-            return null;
+        if (west == 0 && north == 0 && east == 0 && south == 0) {
+            return true;
         }
-        Rect band = new Rect(rect.x, rect.z, newW, newH);
+        int newX = rect.x - west;
+        int newZ = rect.z - north;
+        int newW = rect.w + west + east;
+        int newH = rect.h + north + south;
+        if (newX < this.heapMinX || newZ < this.heapMinZ || newX + newW > this.heapMinX + this.heapSize ||
+                newZ + newH > this.heapMinZ + this.heapSize) {
+            return false;
+        }
+        Rect band = new Rect(newX, newZ, newW, newH);
+        Rect owned = null;
         for (Rect other : this.allocatedRects) {
-            if (other == rect) {
-                continue;
-            }
-            if (other.intersects(band)) {
-                return null;
+            if (other.equals(rect)) {
+                owned = other;
+            } else if (other.intersects(band)) {
+                return false;
             }
         }
+        if (owned == null) {
+            return false;
+        }
+        owned.x = newX;
+        owned.z = newZ;
+        owned.w = newW;
+        owned.h = newH;
+        rect.x = newX;
+        rect.z = newZ;
         rect.w = newW;
         rect.h = newH;
         this.carve(band);
         this.coalesce();
-        return rect;
-    }
-
-    public Rect grow(Rect rect, int neededW, int neededH) {
-        int targetW = Math.max(neededW, Math.max(rect.w * 2, 1));
-        int targetH = Math.max(neededH, Math.max(rect.h * 2, 1));
-        Rect extended = this.extendInPlace(rect, targetW, targetH);
-        if (extended != null) {
-            return extended;
-        }
-        this.freeOwned(rect);
-        return this.allocate(targetW, targetH);
+        return true;
     }
 
     private void carve(Rect cut) {

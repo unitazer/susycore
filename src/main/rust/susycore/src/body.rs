@@ -9,12 +9,14 @@ use rapier3d::glamx::Quat;
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::query::Ray;
 use rapier3d::prelude::{
-  ColliderBuilder, ColliderHandle, QueryFilter, RigidBodyBuilder, SharedShape,
+  ActiveEvents, ColliderBuilder, ColliderHandle, Group, InteractionGroups, InteractionTestMode,
+  QueryFilter, RigidBodyBuilder, SharedShape,
 };
 
 use crate::Real;
 use crate::block_collisions::{AIR_HANDLE, BlockColliderInfoHandle};
 use crate::chunklet::Chunklet;
+use crate::contact_forces::CONTACT_FORCE_EVENT_THRESHOLD;
 use crate::scene::Scene;
 use crate::terrain::{CHUNK_VOLUME, PackedChunkletCoords};
 
@@ -28,6 +30,7 @@ pub struct BodyEntry {
 
 pub const BLOCK_DENSITY: Real = 1000.0;
 pub const POSE_BUFFER_LEN: usize = 11;
+pub const ANCHOR_COLLIDER_HALF_EXTENT: Real = 0.05;
 
 pub struct RayHit {
   pub toi: Real,
@@ -60,6 +63,41 @@ impl Scene {
     handle
   }
 
+  pub fn create_anchor_body(&mut self, entity: EntityId, pos: Vec3) -> RigidBodyHandle {
+    if self.chunklet_bodies.contains_key(&entity) {
+      log::warn!("chunklet body for {} already exists, replacing", entity.0);
+      self.remove_chunklet_body(entity);
+    }
+    let rb = RigidBodyBuilder::fixed()
+      .pose(Pose::from_parts(pos, Quat::IDENTITY))
+      .build();
+    let handle = self.world.bodies.insert(rb);
+    let collider = ColliderBuilder::cuboid(
+      ANCHOR_COLLIDER_HALF_EXTENT,
+      ANCHOR_COLLIDER_HALF_EXTENT,
+      ANCHOR_COLLIDER_HALF_EXTENT,
+    )
+    .collision_groups(InteractionGroups::new(
+      Group::NONE,
+      Group::NONE,
+      InteractionTestMode::And,
+    ))
+    .build();
+    let collider_handle =
+      self
+        .world
+        .colliders
+        .insert_with_parent(collider, handle, &mut self.world.bodies);
+    self.chunklet_bodies.insert(
+      entity,
+      BodyEntry {
+        rb: handle,
+        colliders: HashMap::from([(PackedChunkletCoords::from_xyz(0, 0, 0), collider_handle)]),
+      },
+    );
+    handle
+  }
+
   pub fn add_body_chunk(
     &mut self,
     entity: EntityId,
@@ -71,7 +109,6 @@ impl Scene {
       self.remove_body_chunk(entity, coords);
       return None;
     }
-    self.remove_body_chunk(entity, coords);
     let Some(entry) = self.chunklet_bodies.get_mut(&entity) else {
       log::error!("add_body_chunk on missing body {}", entity.0);
       return None;
@@ -80,13 +117,17 @@ impl Scene {
     let collider = ColliderBuilder::new(SharedShape::new(chunklet))
       .density(BLOCK_DENSITY)
       .translation(offset)
+      .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
+      .contact_force_event_threshold(CONTACT_FORCE_EVENT_THRESHOLD)
       .build();
     let handle =
       self
         .world
         .colliders
         .insert_with_parent(collider, entry.rb, &mut self.world.bodies);
-    entry.colliders.insert(coords, handle);
+    if let Some(old) = entry.colliders.insert(coords, handle) {
+      self.remove_collider(old);
+    }
     self.collider_owners.insert(handle, entity);
     Some(handle)
   }
@@ -138,6 +179,17 @@ impl Scene {
     else {
       return;
     };
+    self.remove_collider(handle);
+    if self
+      .chunklet_bodies
+      .get(&entity)
+      .is_some_and(|entry| entry.colliders.is_empty())
+    {
+      self.prune_joints_of(entity);
+    }
+  }
+
+  fn remove_collider(&mut self, handle: ColliderHandle) {
     self.collider_owners.remove(&handle);
     self.world.colliders.remove(
       handle,
@@ -145,6 +197,13 @@ impl Scene {
       &mut self.world.bodies,
       true,
     );
+  }
+
+  pub fn is_body_sleeping(&self, entity: EntityId) -> bool {
+    self
+      .rb_of(entity)
+      .and_then(|rb| self.world.bodies.get(rb))
+      .is_some_and(|body| body.is_sleeping())
   }
 
   pub fn remove_chunklet_body(&mut self, entity: EntityId) {
@@ -162,6 +221,7 @@ impl Scene {
       &mut self.world.multibody_joints,
       true,
     );
+    self.prune_joints_of(entity);
   }
 
   pub fn set_body_pose(&mut self, entity: EntityId, pos: Vec3, rot: Quat, vel: Vec3) {
@@ -211,7 +271,7 @@ impl Scene {
     }
   }
 
-  fn rb_of(&self, entity: EntityId) -> Option<RigidBodyHandle> {
+  pub(crate) fn rb_of(&self, entity: EntityId) -> Option<RigidBodyHandle> {
     self.chunklet_bodies.get(&entity).map(|e| e.rb)
   }
 
@@ -296,7 +356,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addBodyChunk(
     })
     .resolve::<ThrowRuntimeExAndDefault>();
   let entity = EntityId(tag);
-  let coords = PackedChunkletCoords::from_xyz(lx, ly as u8, lz);
+  let Some(coords) = PackedChunkletCoords::try_from_xyz(lx, ly, lz) else {
+    log::warn!("addBodyChunk on out-of-range chunklet coords {lx} {ly} {lz}");
+    return;
+  };
   let data = buffer.map(|h| BlockColliderInfoHandle(h as u32));
   Scene::with_scene_mut(world_id as usize, |scene| {
     scene.add_body_chunk(
@@ -323,11 +386,15 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_updateBodyChunkBlock(
   new_data: jint,
 ) -> bool {
   debug_assert!(world_id >= 0);
-  debug_assert!((0..16).contains(&x));
-  debug_assert!((0..16).contains(&y));
-  debug_assert!((0..16).contains(&z));
+  if !(0..16).contains(&x) || !(0..16).contains(&y) || !(0..16).contains(&z) {
+    log::warn!("updateBodyChunkBlock on out-of-range block coords {x} {y} {z}");
+    return false;
+  }
   let entity = EntityId(tag);
-  let coords = PackedChunkletCoords::from_xyz(lx, ly as u8, lz);
+  let Some(coords) = PackedChunkletCoords::try_from_xyz(lx, ly, lz) else {
+    log::warn!("updateBodyChunkBlock on out-of-range chunklet coords {lx} {ly} {lz}");
+    return false;
+  };
   Scene::with_scene_mut(world_id as usize, |scene| {
     scene.update_body_block(
       entity,
@@ -353,7 +420,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeBodyChunk(
 ) {
   debug_assert!(world_id >= 0);
   let entity = EntityId(tag);
-  let coords = PackedChunkletCoords::from_xyz(lx, ly as u8, lz);
+  let Some(coords) = PackedChunkletCoords::try_from_xyz(lx, ly, lz) else {
+    log::warn!("removeBodyChunk on out-of-range chunklet coords {lx} {ly} {lz}");
+    return;
+  };
   Scene::with_scene_mut(world_id as usize, |scene| {
     scene.remove_body_chunk(entity, coords);
   });
@@ -361,6 +431,46 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeBodyChunk(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunkletBody(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  tag: jint,
+) {
+  debug_assert!(world_id >= 0);
+  Scene::with_scene_mut(world_id as usize, |scene| {
+    scene.remove_chunklet_body(EntityId(tag));
+  });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addStaticAnchor(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  tag: jint,
+  x: jdouble,
+  y: jdouble,
+  z: jdouble,
+) -> jint {
+  debug_assert!(world_id >= 0);
+  if tag <= 0 {
+    log::warn!("addStaticAnchor on invalid tag {tag}");
+    return 0;
+  }
+  let handle = Scene::with_scene_mut(world_id as usize, |scene| {
+    scene.create_anchor_body(EntityId(tag), Vec3::new(x as Real, y as Real, z as Real))
+  });
+  match handle {
+    Some(_) => tag,
+    None => {
+      log::error!("addStaticAnchor on missing scene {world_id}");
+      0
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeStaticAnchor(
   _env: EnvUnowned,
   _class: JClass,
   world_id: jint,
@@ -495,32 +605,43 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_castRay(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::block_collisions::MinecraftBlockColliderInfo;
   use crate::dispatcher::ChunkletDispatcher;
-  use rapier3d::parry::bounding_volume::Aabb;
+  use crate::joint::{Axis, JointSpec, MotorSpec};
+  use crate::test_util::{collider_handle_for_box, full_chunklet_data};
   use rapier3d::parry::query::PersistentQueryDispatcher;
   use rapier3d::prelude::{ContactManifold, PointQuery, RayCast};
 
   type Manifold = ContactManifold;
 
-  fn full_chunklet_data(
-    handle: BlockColliderInfoHandle,
-  ) -> [BlockColliderInfoHandle; CHUNK_VOLUME] {
-    [handle; CHUNK_VOLUME]
-  }
-
   fn scene() -> Scene {
     Scene::new(Vec3::new(0.0, -10.0, 0.0))
   }
 
-  fn collider_handle_for_box(min: [f32; 3], max: [f32; 3]) -> BlockColliderInfoHandle {
-    MinecraftBlockColliderInfo::new(
-      0.5,
-      BLOCK_DENSITY,
-      0.0,
-      vec![Aabb::new(Vec3::from_slice(&min), Vec3::from_slice(&max))],
-    )
-    .handle()
+  fn single_block_data() -> [BlockColliderInfoHandle; CHUNK_VOLUME] {
+    let mut data = [AIR_HANDLE; CHUNK_VOLUME];
+    data[Chunklet::index(0, 0, 0) as usize] = collider_handle_for_box([0.0; 3], [1.0; 3]);
+    data
+  }
+
+  fn spring_spec(rest_x: Real) -> JointSpec {
+    let spring = MotorSpec {
+      force_based: true,
+      target_pos: 0.0,
+      target_vel: 0.0,
+      stiffness: 5000.0,
+      damping: 4000.0,
+      max_force: 1.0e9,
+    };
+    JointSpec::new()
+      .motor(
+        Axis::LinX,
+        MotorSpec {
+          target_pos: rest_x,
+          ..spring
+        },
+      )
+      .motor(Axis::LinY, spring)
+      .motor(Axis::LinZ, spring)
   }
 
   fn cast(s: &Scene, origin: Vec3, dir: Vec3, max_toi: Real) -> Option<(Real, Vec3, i32)> {
@@ -582,7 +703,7 @@ mod tests {
   }
 
   #[test]
-  fn update_block_changes_count_and_removes_empty_chunklet() {
+  fn update_block_changes_count_and_removes_emptied_chunklet() {
     let mut s = scene();
     s.create_chunklet_body(EntityId(7), Vec3::ZERO, Quat::IDENTITY);
     let h = collider_handle_for_box([0.0; 3], [1.0; 3]);
@@ -609,13 +730,7 @@ mod tests {
     assert_eq!(count(&s), 1);
     s.update_body_block(EntityId(7), key, 1, 2, 3, AIR_HANDLE);
     assert!(s.world.colliders.get(col).is_none());
-    assert!(
-      s.chunklet_bodies
-        .get(&EntityId(7))
-        .unwrap()
-        .colliders
-        .is_empty()
-    );
+    assert!(s.chunklet_bodies.contains_key(&EntityId(7)));
   }
 
   #[test]
@@ -956,6 +1071,95 @@ mod tests {
     assert!(
       points > 0,
       "full cell next to a partial neighbor must still make contact"
+    );
+  }
+
+  #[test]
+  fn anchor_is_immovable_under_joint_spring() {
+    let mut s = Scene::new(Vec3::ZERO);
+    let anchor_pos = Vec3::new(100.0, 0.0, 0.0);
+    let anchor = s.create_anchor_body(EntityId(1), anchor_pos);
+    assert!(s.world.bodies.get(anchor).unwrap().is_fixed());
+    s.create_chunklet_body(
+      EntityId(2),
+      anchor_pos + Vec3::new(14.0, 0.0, 0.0),
+      Quat::IDENTITY,
+    );
+    s.add_body_chunk(
+      EntityId(2),
+      PackedChunkletCoords::from_xyz(0, 0, 0),
+      Vec3::ZERO,
+      single_block_data(),
+    );
+    s.add_joint(EntityId(1), EntityId(2), &spring_spec(10.0))
+      .expect("anchor must pass the colliderless check");
+    assert_eq!(s.joints.len(), 1);
+    for _ in 0..60 {
+      s.world.step();
+    }
+    let anchor_translation = s.world.bodies.get(anchor).unwrap().position().translation;
+    assert!(
+      (anchor_translation - anchor_pos).abs().max_element() < 1e-6,
+      "anchor must never move, got {anchor_translation:?}"
+    );
+    let rb_b = s.chunklet_bodies.get(&EntityId(2)).unwrap().rb;
+    let offset = s.world.bodies.get(rb_b).unwrap().position().translation - anchor_pos;
+    assert!(
+      (offset.x - 10.0).abs() < 2.0,
+      "dynamic body must converge to the spring rest, offset={offset:?}"
+    );
+    assert!(
+      offset.y.abs() < 0.5 && offset.z.abs() < 0.5,
+      "dynamic body must not drift on the damped axes, offset={offset:?}"
+    );
+  }
+
+  #[test]
+  fn joint_rejects_colliderless_body_but_not_anchor() {
+    let mut s = Scene::new(Vec3::ZERO);
+    s.create_anchor_body(EntityId(1), Vec3::ZERO);
+    s.create_chunklet_body(EntityId(2), Vec3::new(5.0, 0.0, 0.0), Quat::IDENTITY);
+    assert!(
+      s.add_joint(EntityId(1), EntityId(2), &JointSpec::new())
+        .is_none(),
+      "colliderless dynamic body must still be rejected"
+    );
+    s.add_body_chunk(
+      EntityId(2),
+      PackedChunkletCoords::from_xyz(0, 0, 0),
+      Vec3::ZERO,
+      single_block_data(),
+    );
+    let id = s
+      .add_joint(EntityId(1), EntityId(2), &JointSpec::new())
+      .expect("anchor must not be rejected as colliderless");
+    assert!(s.joints.contains_key(&id));
+  }
+
+  #[test]
+  fn removing_anchor_prunes_joint_and_body() {
+    let mut s = Scene::new(Vec3::ZERO);
+    let anchor = s.create_anchor_body(EntityId(1), Vec3::ZERO);
+    s.create_chunklet_body(EntityId(2), Vec3::new(5.0, 0.0, 0.0), Quat::IDENTITY);
+    s.add_body_chunk(
+      EntityId(2),
+      PackedChunkletCoords::from_xyz(0, 0, 0),
+      Vec3::ZERO,
+      single_block_data(),
+    );
+    let id = s
+      .add_joint(EntityId(1), EntityId(2), &JointSpec::new())
+      .expect("joint");
+    let handle = s.joints.get(&id).map(|r| r.handle).expect("handle");
+    s.remove_chunklet_body(EntityId(1));
+    assert!(s.world.bodies.get(anchor).is_none());
+    assert!(!s.chunklet_bodies.contains_key(&EntityId(1)));
+    assert!(s.joints.is_empty());
+    assert!(s.world.impulse_joints.get(handle).is_none());
+    assert!(
+      s.add_joint(EntityId(1), EntityId(2), &JointSpec::new())
+        .is_none(),
+      "removed anchor must not accept joints"
     );
   }
 }

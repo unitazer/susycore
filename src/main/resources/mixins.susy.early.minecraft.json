@@ -16,13 +16,16 @@
     "EntityMixin",
     "EntityPlayerMixin",
     "EntityTNTPrimedMixin",
+    "NetHandlerPlayServerMixin",
     "PlayerChunkMapMixin",
     "WorldMixin"
   ],
   "client" : [
     "BlockModelRendererMixin",
+    "ChunkProviderClientAccessor",
     "ChunkProviderClientMixin",
     "ChunkRenderWorkerMixin",
+    "EntityRendererMixin",
     "RenderChunkMixin",
     "RenderGlobalAccessor",
     "RenderGlobalMixin",

@@ -11,7 +11,10 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import supersymmetry.api.subworld.SubWorldAllocator;
 import supersymmetry.api.subworld.SubWorldRegistry;
+import supersymmetry.api.subworld.SubWorldVoidChunks;
+import supersymmetry.api.subworld.SubWorldVoidFallbacks;
 
 @Mixin(ChunkProviderClient.class)
 public abstract class ChunkProviderClientMixin {
@@ -22,30 +25,40 @@ public abstract class ChunkProviderClientMixin {
 
     @Inject(method = "loadChunk", at = @At("HEAD"), cancellable = true)
     private void susy$routePlotLoadChunk(int chunkX, int chunkZ, CallbackInfoReturnable<Chunk> cir) {
-        if (SubWorldRegistry.find(world, chunkX, chunkZ) != null) {
-            cir.setReturnValue(SubWorldRegistry.getPlotChunk(world, chunkX, chunkZ));
+        Chunk chunk = SubWorldRegistry.getPlotChunk(this.world, chunkX, chunkZ);
+        if (chunk == null && SubWorldAllocator.isInHeapRegion(chunkX, chunkZ)) {
+            chunk = SubWorldVoidFallbacks.get(this.world, "client", chunkX, chunkZ);
+        }
+        if (chunk != null) {
+            cir.setReturnValue(chunk);
         }
     }
 
     @Inject(method = "provideChunk", at = @At("HEAD"), cancellable = true)
-    private void onProvideChunk(int x, int z, CallbackInfoReturnable<Chunk> cir) {
-        Chunk chunk = SubWorldRegistry.getPlotChunk(world, x, z);
+    private void susy$onProvideChunk(int x, int z, CallbackInfoReturnable<Chunk> cir) {
+        Chunk chunk = SubWorldRegistry.getPlotChunk(this.world, x, z);
+        if (chunk == null && SubWorldAllocator.isInHeapRegion(x, z)) {
+            chunk = SubWorldVoidFallbacks.get(this.world, "client", x, z);
+        }
         if (chunk != null) {
             cir.setReturnValue(chunk);
         }
     }
 
     @Inject(method = "getLoadedChunk", at = @At("HEAD"), cancellable = true)
-    private void onGetLoadedChunk(int x, int z, CallbackInfoReturnable<Chunk> cir) {
-        Chunk chunk = SubWorldRegistry.peekPlotChunk(world, x, z);
+    private void susy$onGetLoadedChunk(int x, int z, CallbackInfoReturnable<Chunk> cir) {
+        Chunk chunk = SubWorldRegistry.peekPlotChunk(this.world, x, z);
+        if (chunk == null && SubWorldAllocator.isInHeapRegion(x, z)) {
+            chunk = SubWorldVoidChunks.get(this.world, x, z);
+        }
         if (chunk != null) {
             cir.setReturnValue(chunk);
         }
     }
 
     @Inject(method = "isChunkGeneratedAt", at = @At("HEAD"), cancellable = true)
-    private void onIsChunkGeneratedAt(int x, int z, CallbackInfoReturnable<Boolean> cir) {
-        if (SubWorldRegistry.find(world, x, z) != null) {
+    private void susy$onIsChunkGeneratedAt(int x, int z, CallbackInfoReturnable<Boolean> cir) {
+        if (SubWorldAllocator.isInHeapRegion(x, z)) {
             cir.setReturnValue(true);
         }
     }

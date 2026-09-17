@@ -1,10 +1,13 @@
 package supersymmetry.mixins.minecraft;
 
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.network.NetworkManager;
+import net.minecraft.network.play.server.SPacketUpdateTileEntity;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
+import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -24,6 +27,14 @@ public abstract class TileEntityMixin {
 
     @Inject(method = "handleUpdateTag", remap = false, at = @At("RETURN"))
     private void susy$markPlotSectionDirtyOnSync(NBTTagCompound tag, CallbackInfo ci) {
+        if (world != null && world.isRemote) {
+            SubWorldChunkRenderer.markSectionDirty(world, pos);
+        }
+    }
+
+    @Inject(method = "onDataPacket", remap = false, at = @At("RETURN"))
+    private void susy$markPlotSectionDirtyOnDataPacket(@Nullable NetworkManager net,
+                                                       SPacketUpdateTileEntity packet, CallbackInfo ci) {
         if (world != null && world.isRemote) {
             SubWorldChunkRenderer.markSectionDirty(world, pos);
         }

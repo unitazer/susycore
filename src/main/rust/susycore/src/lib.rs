@@ -1,12 +1,20 @@
 pub mod block_collisions;
 pub mod body;
 pub mod chunklet;
+pub mod contact_forces;
 pub mod dispatcher;
+pub mod joint;
 pub mod logger;
 pub mod octree;
 pub mod rendering;
 pub mod scene;
 pub mod terrain;
+
+#[cfg(test)]
+mod turret_bench;
+
+#[cfg(test)]
+pub(crate) mod test_util;
 
 use std::env;
 use std::time::Instant;

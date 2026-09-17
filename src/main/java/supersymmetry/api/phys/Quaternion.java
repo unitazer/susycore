@@ -184,10 +184,6 @@ public final class Quaternion {
         return w == q.w && x == q.x && y == q.y && z == q.z;
     }
 
-    public boolean RoughlyEquals(Quaternion other, double epsilon) {
-        return this.dot(other) < epsilon;
-    }
-
     @Override
     public int hashCode() {
         return Objects.hash(w, x, y, z);

@@ -20,8 +20,6 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 import org.jetbrains.annotations.Nullable;
 
-import com.mojang.realmsclient.util.Pair;
-
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.subworld.SubWorldPlot;
@@ -236,6 +234,17 @@ public class Rapier {
         return handle;
     }
 
+    private static final List<AxisAlignedBB> STATE_HANDLE_AABB_TMP = new ArrayList<>();
+
+    public static boolean hasBlockCollider(World world, IBlockState state) {
+        if (state.getBlock() == Blocks.AIR) return false;
+        PooledMutableBlockPos pos = PooledMutableBlockPos.retain();
+        pos.setPos(0, 0, 0);
+        int handle = handleForStateId(Block.getStateId(state), world, pos, 0, 0, 0, STATE_HANDLE_AABB_TMP);
+        pos.release();
+        return handle > 0;
+    }
+
     private static boolean isFullSolidStateId(int stateId) {
         ensureStateIdCaches(stateId);
         byte f = stateIdFullSolid[stateId];
@@ -296,9 +305,6 @@ public class Rapier {
         addForceDebug(world_id, entity.getColliderId().get(), fx, fy, fz);
     }
 
-    public static native void RbInfo(
-                                     int world_id, long handle); // TODO api to get most of the collider struct in java
-
     public static void step_world(World w) {
         var id = initializedWorlds.get(w);
         if (id != null) {
@@ -306,14 +312,13 @@ public class Rapier {
         }
     }
 
-    public static Pair<Vec3d, Quaternion> get_entity_pose(AbstractPhysicsEntity entity) {
-        var world_id = initializedWorlds.get(entity.getEntityWorld());
-        if (world_id == null) return Pair.of(Vec3d.ZERO, Quaternion.IDENTITY);
-        getEntityPose(world_id, entity.getColliderId().get(), cache);
-        return Pair.of(
-                new Vec3d(cache[0], cache[1], cache[2]),
-                new Quaternion(cache[6], cache[3], cache[4], cache[5]));
+    public static int drainContactForces(World world, double[] out) {
+        int id = worldId(world);
+        if (id < 0) return 0;
+        return drainContactForces(id, out);
     }
+
+    public static native int drainContactForces(int world_id, double[] out);
 
     public static void syncEntity(AbstractPhysicsEntity entity) {
         if (!entity.getColliderId().isPresent()) return;
@@ -342,11 +347,6 @@ public class Rapier {
             return Optional.empty();
         }
         var shape = entity.getShape();
-        // if (shape.type() == null || shape.data() == null || shape.indices() == null) {
-        // SusyLog.logger.error("shape null fields: type={}, data={}, indices={}", shape.type() == null,
-        // shape.data() == null, shape.indices() == null);
-        // return Optional.empty();
-        // }
 
         long handle = addEntity(
                 world_id,
@@ -448,13 +448,6 @@ public class Rapier {
         return isFullSolidNeighbor(world, plot, x - 1, y, z) && isFullSolidNeighbor(world, plot, x + 1, y, z) &&
                 isFullSolidNeighbor(world, plot, x, y - 1, z) && isFullSolidNeighbor(world, plot, x, y + 1, z) &&
                 isFullSolidNeighbor(world, plot, x, y, z - 1) && isFullSolidNeighbor(world, plot, x, y, z + 1);
-    }
-
-    private static double volume(AxisAlignedBB aabb) {
-        double x = aabb.maxX - aabb.minX;
-        double y = aabb.maxY - aabb.minY;
-        double z = aabb.maxZ - aabb.minZ;
-        return x * y * z;
     }
 
     private static native void step(int world_id);
@@ -569,6 +562,49 @@ public class Rapier {
         if (handle < 0) return null;
         return new RaycastHit(rayCache[0], new Vec3d(rayCache[1], rayCache[2], rayCache[3]), (int) rayCache[4]);
     }
+
+    public static long addJoint(World world, int tagA, int tagB, int flags, double[] data) {
+        int id = worldId(world);
+        if (id < 0) return 0;
+        return addJoint(id, tagA, tagB, flags, data);
+    }
+
+    public static boolean removeJoint(World world, long joint) {
+        int id = worldId(world);
+        if (id < 0) return false;
+        return removeJoint(id, joint);
+    }
+
+    public static boolean setJointMotor(World world, long joint, int axis, double targetPos, double targetVel,
+                                        double stiffness, double damping, double maxForce, boolean forceBased) {
+        int id = worldId(world);
+        if (id < 0) return false;
+        return setJointMotor(id, joint, axis, targetPos, targetVel, stiffness, damping, maxForce, forceBased);
+    }
+
+    public static int addStaticAnchor(World world, int tag, Vec3d pos) {
+        int id = worldId(world);
+        if (id < 0) return 0;
+        return addStaticAnchor(id, tag, pos.x, pos.y, pos.z);
+    }
+
+    public static void removeStaticAnchor(World world, int tag) {
+        int id = worldId(world);
+        if (id < 0) return;
+        removeStaticAnchor(id, tag);
+    }
+
+    private static native int addStaticAnchor(int world_id, int tag, double x, double y, double z);
+
+    private static native void removeStaticAnchor(int world_id, int tag);
+
+    private static native long addJoint(int world_id, int tag_a, int tag_b, int flags, double[] data);
+
+    private static native boolean removeJoint(int world_id, long joint);
+
+    private static native boolean setJointMotor(int world_id, long joint, int axis, double target_pos,
+                                                double target_vel, double stiffness, double damping,
+                                                double max_force, boolean force_based);
 
     private static native boolean createChunkletBody(int world_id, int tag, double x, double y, double z,
                                                      double qw, double qx, double qy, double qz);

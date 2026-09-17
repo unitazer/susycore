@@ -1,12 +1,11 @@
 package supersymmetry.mixins.minecraft;
 
 import net.minecraft.block.state.IBlockState;
-import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.init.Blocks;
 import net.minecraft.network.play.server.SPacketBlockChange;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
-import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.Chunk;
 
 import org.spongepowered.asm.mixin.Final;
@@ -17,7 +16,12 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import supersymmetry.api.SusyLog;
+import supersymmetry.api.phys.BodySplitter;
 import supersymmetry.api.phys.ChunkSyncManager;
+import supersymmetry.api.phys.PhysicsWorldEntity;
+import supersymmetry.api.subworld.SubWorldAllocator;
+import supersymmetry.api.subworld.SubWorldPlot;
 import supersymmetry.api.subworld.SubWorldRegistry;
 import supersymmetry.client.renderer.subworld.SubWorldChunkRenderer;
 import supersymmetry.common.EventHandlers;
@@ -43,26 +47,45 @@ public class ChunkMixin {
         if (oldState == null || oldState == state) return;
 
         if (this.world.isRemote) {
+            SubWorldPlot clientPlot = SubWorldRegistry.find(this.world, this.x, this.z);
+            if (clientPlot == null && SubWorldAllocator.isInHeapRegion(this.x, this.z)) {
+                SusyLog.logger.debug("[susy-growth] client block write into void chunk at heap {} (chunk {}, {})", pos,
+                        this.x, this.z);
+            }
             SubWorldChunkRenderer.markSectionDirty(this.world, pos);
+            PhysicsWorldEntity body = PhysicsWorldEntity.forPlot(clientPlot);
+            if (body != null) {
+                body.markClientContentDirty();
+            }
             return;
         }
 
+        SubWorldPlot plot = SubWorldRegistry.find(this.world, this.x, this.z);
         ChunkSyncManager csm = EventHandlers.chunkSyncManagers.get(this.world);
         if (csm != null) csm.handleBlockChange(pos);
 
-        if (SubWorldRegistry.find(this.world, this.x, this.z) != null) {
-            WorldServer server = (WorldServer) this.world;
-            int margin = server.getMinecraftServer().getPlayerList().getViewDistance() * 16 + 32;
-            SPacketBlockChange packet = new SPacketBlockChange(this.world, pos);
-            for (EntityPlayer player : this.world.playerEntities) {
-                if (player instanceof EntityPlayerMP) {
-                    EntityPlayerMP playerMP = (EntityPlayerMP) player;
-                    if (playerMP.posX >= pos.getX() - margin && playerMP.posX <= pos.getX() + margin &&
-                            playerMP.posY >= pos.getY() - margin && playerMP.posY <= pos.getY() + margin &&
-                            playerMP.posZ >= pos.getZ() - margin && playerMP.posZ <= pos.getZ() + margin) {
-                        playerMP.connection.sendPacket(packet);
-                    }
+        PhysicsWorldEntity body = PhysicsWorldEntity.forPlot(plot);
+        if (SubWorldAllocator.isInHeapRegion(this.x, this.z)) {
+            if (body == null) {
+                SusyLog.logger.debug("[susy-growth] server block change at heap {} chunk ({}, {}) body=none plot={}",
+                        pos, this.x, this.z, plot);
+            } else {
+                SusyLog.logger.debug(
+                        "[susy-growth] server block change at heap {} chunk ({}, {}) body=present local={}", pos,
+                        this.x, this.z, body.getLocalPos(pos));
+            }
+        }
+        if (body != null) {
+            BlockPos localPos = body.getLocalPos(pos);
+            if (localPos != null) {
+                body.syncPlotBlockToBody(localPos);
+                if (state.getBlock() == Blocks.AIR && oldState.getBlock() != Blocks.AIR) {
+                    BodySplitter.onPlotBlockRemoved(body);
                 }
+            }
+            SPacketBlockChange packet = new SPacketBlockChange(this.world, pos);
+            for (EntityPlayerMP player : body.getTrackingPlayers()) {
+                player.connection.sendPacket(packet);
             }
         }
     }

@@ -12,10 +12,11 @@ import net.minecraft.world.World;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
+import gregtech.api.GregTechAPI;
 import gregtech.api.network.IClientExecutor;
 import gregtech.api.network.IPacket;
+import supersymmetry.api.phys.BlockStateInfo;
 import supersymmetry.api.phys.PhysicsWorldEntity;
-import supersymmetry.api.phys.PhysicsWorldEntity.BlockStateInfo;
 import supersymmetry.api.phys.Quaternion;
 
 public class SPacketSubworldPlotSync implements IPacket, IClientExecutor {
@@ -57,6 +58,7 @@ public class SPacketSubworldPlotSync implements IPacket, IClientExecutor {
         if (entity instanceof PhysicsWorldEntity) {
             ((PhysicsWorldEntity) entity).applyPlotSync(this.originChunkX, this.originChunkZ, this.sizeChunksX,
                     this.sizeChunksZ, this.blocks, this.rot, this.rp, this.size);
+            GregTechAPI.networkHandler.sendToServer(new CPacketSubworldPlotSyncAck(this.entityId));
         }
     }
 
@@ -68,7 +70,7 @@ public class SPacketSubworldPlotSync implements IPacket, IClientExecutor {
         buf.writeInt(this.sizeChunksX);
         buf.writeInt(this.sizeChunksZ);
         PhysicsWorldEntity.writePose(buf, this.rot, this.rp, this.size);
-        PhysicsWorldEntity.writeBlocks(buf, this.blocks);
+        BlockStateInfo.writeBlocks(buf, this.blocks);
     }
 
     @Override
@@ -82,7 +84,7 @@ public class SPacketSubworldPlotSync implements IPacket, IClientExecutor {
             this.rot = PhysicsWorldEntity.readRotation(buf);
             this.rp = new Vec3d(buf.readFloat(), buf.readFloat(), buf.readFloat());
             this.size = new float[] { buf.readFloat(), buf.readFloat(), buf.readFloat() };
-            this.blocks = PhysicsWorldEntity.readBlocks(buf);
+            this.blocks = BlockStateInfo.readBlocks(buf);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

@@ -31,6 +31,7 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.phys.DebugCuboidEntity;
 import supersymmetry.api.phys.DebugSphereEntity;
+import supersymmetry.api.phys.PhysicsBodyFormation;
 import supersymmetry.api.phys.PhysicsWorldEntity;
 import supersymmetry.api.phys.Rapier;
 import supersymmetry.api.subworld.SubWorldPlot;
@@ -197,21 +198,33 @@ public class TestingMTE extends MultiblockWithDisplayBase {
         return builder;
     }
 
+    static AxisAlignedBB structureBounds(BlockPattern pattern, BlockPos controllerPos) {
+        AxisAlignedBB box = new AxisAlignedBB(controllerPos);
+        for (Long2ObjectMap.Entry<BlockInfo> entry : pattern.cache.long2ObjectEntrySet()) {
+            box = box.union(new AxisAlignedBB(BlockPos.fromLong(entry.getLongKey())));
+        }
+        return box;
+    }
+
     private void goog() {
         SusyLog.logger.info("goog in TestingMTE");
         if (this.isStructureFormed() && this.structurePattern != null) {
             var cache = this.structurePattern.cache;
-            var box = new AxisAlignedBB(this.getPos());
-            for (Long2ObjectMap.Entry<BlockInfo> entry : cache.long2ObjectEntrySet()) {
-                BlockPos pos = BlockPos.fromLong(entry.getLongKey());
-                box = box.union(new AxisAlignedBB(pos));
-            }
+            var box = structureBounds(this.structurePattern, this.getPos());
 
             var offset = new BlockPos(1 - (int) box.minX, 1 - (int) box.minY, 1 - (int) box.minZ);
 
             float sx = (float) (box.maxX - box.minX);
             float sy = (float) (box.maxY - box.minY);
             float sz = (float) (box.maxZ - box.minZ);
+
+            if (sy > PhysicsBodyFormation.MAX_CHILD_SIZE_Y) {
+                SusyLog.logger.error(
+                        "TestingMTE: pattern height {} exceeds the {} block interaction height cap, not spawning a physics body",
+                        sy,
+                        PhysicsBodyFormation.MAX_CHILD_SIZE_Y);
+                return;
+            }
 
             int minLocalX = Integer.MAX_VALUE;
             int maxLocalX = Integer.MIN_VALUE;
