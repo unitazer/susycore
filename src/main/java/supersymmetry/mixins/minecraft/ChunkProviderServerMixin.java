@@ -16,7 +16,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import supersymmetry.api.subworld.SubWorldAllocator;
 import supersymmetry.api.subworld.SubWorldRegistry;
 import supersymmetry.api.subworld.SubWorldVoidChunks;
-import supersymmetry.api.subworld.SubWorldVoidFallbacks;
 
 @Mixin(ChunkProviderServer.class)
 public abstract class ChunkProviderServerMixin {
@@ -93,7 +92,7 @@ public abstract class ChunkProviderServerMixin {
             return chunk;
         }
         if (SubWorldAllocator.isInHeapRegion(x, z)) {
-            return SubWorldVoidFallbacks.get(this.world, "server", x, z);
+            return SubWorldVoidChunks.get(this.world, x, z);
         }
         return null;
     }

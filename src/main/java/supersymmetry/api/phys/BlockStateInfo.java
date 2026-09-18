@@ -8,11 +8,15 @@ import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
+import net.minecraft.nbt.NBTTagLong;
+import net.minecraft.nbt.NBTTagLongArray;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.common.util.Constants;
 
 import org.jetbrains.annotations.Nullable;
+
+import supersymmetry.mixins.minecraft.NBTTagLongArrayAccessor;
 
 public final class BlockStateInfo {
 
@@ -65,39 +69,88 @@ public final class BlockStateInfo {
     }
 
     public static void writeBlocksToNBT(NBTTagCompound tag, List<BlockStateInfo> blocks) {
-        NBTTagList blockList = new NBTTagList();
-        for (BlockStateInfo info : blocks) {
+        long[] positions = new long[blocks.size()];
+        int[] stateIds = new int[blocks.size()];
+        NBTTagList tagged = new NBTTagList();
+        for (int i = 0; i < blocks.size(); i++) {
+            BlockStateInfo info = blocks.get(i);
+            positions[i] = info.pos.toLong();
+            stateIds[i] = Block.getStateId(info.state);
+            if (info.tileData == null && info.extra == null) continue;
             NBTTagCompound entry = new NBTTagCompound();
-            entry.setInteger("x", info.pos.getX());
-            entry.setShort("y", (short) info.pos.getY());
-            entry.setInteger("z", info.pos.getZ());
-            entry.setInteger("b", Block.getStateId(info.state));
+            entry.setInteger("i", i);
             if (info.tileData != null) {
                 entry.setTag("te", info.tileData);
             }
             if (info.extra != null) {
                 entry.setTag("e", info.extra);
             }
-            blockList.appendTag(entry);
+            tagged.appendTag(entry);
         }
-        tag.setTag("plotBlocks", blockList);
+        tag.setTag("plotBlocks", new NBTTagLongArray(positions));
+        tag.setIntArray("plotBlockStates", stateIds);
+        if (tagged.tagCount() > 0) {
+            tag.setTag("plotBlockTags", tagged);
+        }
     }
 
     public static List<BlockStateInfo> readBlocksFromNBT(NBTTagCompound tag) {
+        int format = tag.getTagId("plotBlocks");
+        if (format == Constants.NBT.TAG_LONG_ARRAY) {
+            return readPackedBlocks(((NBTTagLongArrayAccessor) tag.getTag("plotBlocks")).getData(), tag);
+        }
+        if (format != Constants.NBT.TAG_LIST) {
+            return new ArrayList<>();
+        }
+        NBTTagList blockList = (NBTTagList) tag.getTag("plotBlocks");
+        return blockList.getTagType() == Constants.NBT.TAG_LONG ?
+                readPackedBlocks(longsFromList(blockList), tag) : readLegacyBlocks(blockList);
+    }
+
+    private static long[] longsFromList(NBTTagList list) {
+        long[] values = new long[list.tagCount()];
+        for (int i = 0; i < values.length; i++) {
+            values[i] = ((NBTTagLong) list.get(i)).getLong();
+        }
+        return values;
+    }
+
+    private static List<BlockStateInfo> readPackedBlocks(long[] positions, NBTTagCompound tag) {
+        int count = positions.length;
+        int[] stateIds = tag.getIntArray("plotBlockStates");
+        List<BlockStateInfo> blocks = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            blocks.add(new BlockStateInfo(BlockPos.fromLong(positions[i]), Block.getStateById(stateIds[i])));
+        }
+        if (!tag.hasKey("plotBlockTags", Constants.NBT.TAG_LIST)) {
+            return blocks;
+        }
+        NBTTagList tagged = tag.getTagList("plotBlockTags", Constants.NBT.TAG_COMPOUND);
+        for (int i = 0; i < tagged.tagCount(); i++) {
+            NBTTagCompound entry = tagged.getCompoundTagAt(i);
+            int index = entry.getInteger("i");
+            if (index < 0 || index >= blocks.size()) continue;
+            BlockStateInfo info = blocks.get(index);
+            NBTTagCompound tileData = entry.hasKey("te", Constants.NBT.TAG_COMPOUND) ? entry.getCompoundTag("te") :
+                    null;
+            NBTTagCompound extra = entry.hasKey("e", Constants.NBT.TAG_COMPOUND) ? entry.getCompoundTag("e") : null;
+            blocks.set(index, new BlockStateInfo(info.pos, info.state, tileData, extra));
+        }
+        return blocks;
+    }
+
+    private static List<BlockStateInfo> readLegacyBlocks(NBTTagList blockList) {
         List<BlockStateInfo> blocks = new ArrayList<>();
-        if (tag.hasKey("plotBlocks", Constants.NBT.TAG_LIST)) {
-            NBTTagList blockList = tag.getTagList("plotBlocks", Constants.NBT.TAG_COMPOUND);
-            for (int i = 0; i < blockList.tagCount(); i++) {
-                NBTTagCompound entry = blockList.getCompoundTagAt(i);
-                int x = entry.getInteger("x");
-                int y = entry.getShort("y");
-                int z = entry.getInteger("z");
-                int blockId = entry.getInteger("b");
-                NBTTagCompound tileData = entry.hasKey("te", Constants.NBT.TAG_COMPOUND) ? entry.getCompoundTag("te") :
-                        null;
-                NBTTagCompound extra = entry.hasKey("e", Constants.NBT.TAG_COMPOUND) ? entry.getCompoundTag("e") : null;
-                blocks.add(new BlockStateInfo(new BlockPos(x, y, z), Block.getStateById(blockId), tileData, extra));
-            }
+        for (int i = 0; i < blockList.tagCount(); i++) {
+            NBTTagCompound entry = blockList.getCompoundTagAt(i);
+            int x = entry.getInteger("x");
+            int y = entry.getShort("y");
+            int z = entry.getInteger("z");
+            int blockId = entry.getInteger("b");
+            NBTTagCompound tileData = entry.hasKey("te", Constants.NBT.TAG_COMPOUND) ? entry.getCompoundTag("te") :
+                    null;
+            NBTTagCompound extra = entry.hasKey("e", Constants.NBT.TAG_COMPOUND) ? entry.getCompoundTag("e") : null;
+            blocks.add(new BlockStateInfo(new BlockPos(x, y, z), Block.getStateById(blockId), tileData, extra));
         }
         return blocks;
     }

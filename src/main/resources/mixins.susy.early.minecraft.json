@@ -1,10 +1,10 @@
 {
-  "package" : "supersymmetry.mixins.minecraft",
-  "refmap" : "mixins.susy.refmap.json",
-  "target" : "@env(DEFAULT)",
-  "minVersion" : "0.8",
-  "compatibilityLevel" : "JAVA_8",
-  "mixins" : [
+  "package": "supersymmetry.mixins.minecraft",
+  "refmap": "mixins.susy.refmap.json",
+  "target": "@env(DEFAULT)",
+  "minVersion": "0.8",
+  "compatibilityLevel": "JAVA_8",
+  "mixins": [
     "BlockFireMixin",
     "BlockStateContainerAccessor",
     "ChunkAccessor",
@@ -16,11 +16,12 @@
     "EntityMixin",
     "EntityPlayerMixin",
     "EntityTNTPrimedMixin",
+    "NBTTagLongArrayAccessor",
     "NetHandlerPlayServerMixin",
     "PlayerChunkMapMixin",
     "WorldMixin"
   ],
-  "client" : [
+  "client": [
     "BlockModelRendererMixin",
     "ChunkProviderClientAccessor",
     "ChunkProviderClientMixin",

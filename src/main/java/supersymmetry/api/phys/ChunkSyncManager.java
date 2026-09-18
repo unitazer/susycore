@@ -15,6 +15,8 @@ import org.jetbrains.annotations.Nullable;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import supersymmetry.api.SusyLog;
+import supersymmetry.api.subworld.SubWorldAllocator;
+import supersymmetry.api.subworld.SubWorldRegistry;
 
 public class ChunkSyncManager {
 
@@ -72,7 +74,8 @@ public class ChunkSyncManager {
         var it = tickets.long2ObjectEntrySet().fastIterator();
         while (it.hasNext()) {
             Ticket t = it.next().getValue();
-            if (t.lastInhabitedTick < gameTime - STALE_TICK_TIMEOUT || !isSubchunkLoaded(t.x, t.y, t.z)) {
+            if (isPlotOrHeapChunk(t.x, t.z) || t.lastInhabitedTick < gameTime - STALE_TICK_TIMEOUT ||
+                    !isSubchunkLoaded(t.x, t.y, t.z)) {
                 Rapier.removeChunk(worldId, t.x, t.y, t.z);
                 it.remove();
                 staleRemoved++;
@@ -114,9 +117,8 @@ public class ChunkSyncManager {
         fullScansAdded = 0;
         double ms = (System.nanoTime() - start) / 1e6;
         if (ms > 5 || staleRemoved > 0 || fullScans > 0) {
-            SusyLog.logger.info(String.format(
-                    "[susy-chunksync] bodies=%d legacyTickets=%d iters=%d stale=%d fullScans=%d cachedAdds=%d took=%.3f ms",
-                    bodies, tickets.size(), iters, staleRemoved, fullScans, cachedAdds, ms));
+            SusyLog.logger.info("bodies={} legacyTickets={} iters={} stale={} fullScans={} cachedAdds={} took={} ms",
+                    bodies, tickets.size(), iters, staleRemoved, fullScans, cachedAdds, ms);
         }
     }
 
@@ -139,6 +141,7 @@ public class ChunkSyncManager {
         int maxCZ = MathHelper.ceil(bb.maxZ / 16.0) + hPad;
         for (int cx = minCX; cx <= maxCX; cx++) {
             for (int cz = minCZ; cz <= maxCZ; cz++) {
+                if (isPlotOrHeapChunk(cx, cz)) continue;
                 Chunk chunk = world.getChunkProvider().getLoadedChunk(cx, cz);
                 if (chunk == null || !chunk.isLoaded()) continue;
                 for (int sy = minCY; sy <= maxCY; sy++) {
@@ -230,6 +233,7 @@ public class ChunkSyncManager {
     }
 
     @Nullable private CachedSubchunk forceSyncSubchunk(int worldId, int cx, int cy, int cz) {
+        if (isPlotOrHeapChunk(cx, cz)) return null;
         Chunk chunk = world.getChunkProvider().getLoadedChunk(cx, cz);
         if (chunk == null || !chunk.isLoaded() || cy < 0 || cy >= chunk.storageArrays.length) {
             return null;
@@ -272,6 +276,10 @@ public class ChunkSyncManager {
 
     private int cachedAddsThisTick;
     private int fullScansAdded;
+
+    private boolean isPlotOrHeapChunk(int cx, int cz) {
+        return SubWorldAllocator.isInHeapRegion(cx, cz) || SubWorldRegistry.peekPlotChunk(world, cx, cz) != null;
+    }
 
     private boolean isSubchunkLoaded(int x, int y, int z) {
         Chunk chunk = world.getChunkProvider().getLoadedChunk(x, z);

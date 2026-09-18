@@ -5,6 +5,7 @@ import java.util.function.UnaryOperator;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
 
+import supersymmetry.api.util.Quaternion;
 import supersymmetry.api.util.SuSyUtility;
 
 public final class RigidPose {
@@ -12,11 +13,17 @@ public final class RigidPose {
     public final Vec3d position;
     public final Quaternion rotation;
     public final Vec3d rotationPoint;
+    public final Vec3d velocity;
 
     public RigidPose(Vec3d position, Quaternion rotation, Vec3d rotationPoint) {
+        this(position, rotation, rotationPoint, Vec3d.ZERO);
+    }
+
+    public RigidPose(Vec3d position, Quaternion rotation, Vec3d rotationPoint, Vec3d velocity) {
         this.position = position;
         this.rotation = rotation;
         this.rotationPoint = rotationPoint;
+        this.velocity = velocity;
     }
 
     public Vec3d worldFromPlotLocal(Vec3d plotLocal) {

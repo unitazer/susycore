@@ -1,11 +1,8 @@
 package supersymmetry.api.phys;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Deque;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,12 +13,16 @@ import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
+import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.subworld.SubWorldPlot;
 
 public final class BodySplitter {
 
-    private static final int MAX_SPLIT_COMPONENTS = 8;
+    private static final int MAX_SPLIT_COMPONENTS = 10;
     private static final int[][] NEIGHBOR_OFFSETS = {
             { 1, 0, 0 },
             { -1, 0, 0 },
@@ -57,12 +58,12 @@ public final class BodySplitter {
     private static void splitIfDisconnected(PhysicsWorldEntity body) {
         SubWorldPlot plot = body.getPlot();
         if (plot == null || !body.hasColliders()) return;
-        Set<BlockPos> solid = collectSolidLocals(body.getEntityWorld(), plot);
+        LongSet solid = collectSolidLocals(body.getEntityWorld(), plot);
         List<Component> components = findComponents(solid);
         if (components.size() <= 1) return;
         if (components.size() > MAX_SPLIT_COMPONENTS) {
             SusyLog.logger.warn(
-                    "BodySplitter: body {} fell apart into {} components, above the cap of {}, keeping it as one body",
+                    "body {} split into {} chunks > {} (MAX_SPLIT_COMPONENTS), aborting",
                     body.getEntityId(), components.size(), MAX_SPLIT_COMPONENTS);
             return;
         }
@@ -73,8 +74,8 @@ public final class BodySplitter {
         }
     }
 
-    private static Set<BlockPos> collectSolidLocals(World world, SubWorldPlot plot) {
-        Set<BlockPos> solid = new HashSet<>();
+    private static LongOpenHashSet collectSolidLocals(World world, SubWorldPlot plot) {
+        LongOpenHashSet solid = new LongOpenHashSet();
         for (Chunk chunk : plot.getLoadedChunks().values()) {
             ExtendedBlockStorage[] storages = chunk.getBlockStorageArray();
             int baseX = (chunk.x - plot.getOriginChunkX()) << 4;
@@ -83,11 +84,12 @@ public final class BodySplitter {
                 ExtendedBlockStorage storage = storages[sy];
                 if (storage == null || storage.isEmpty()) continue;
                 int baseY = (sy << 4) - SubWorldPlot.RENDER_ORIGIN_Y;
+                BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
                 for (int y = 0; y < 16; y++) {
                     for (int x = 0; x < 16; x++) {
                         for (int z = 0; z < 16; z++) {
                             if (!Rapier.hasBlockCollider(world, storage.get(x, y, z))) continue;
-                            solid.add(new BlockPos(baseX + x, baseY + y, baseZ + z));
+                            solid.add(pos.setPos(baseX + x, baseY + y, baseZ + z).toLong());
                         }
                     }
                 }
@@ -96,21 +98,23 @@ public final class BodySplitter {
         return solid;
     }
 
-    private static List<Component> findComponents(Set<BlockPos> solid) {
+    private static List<Component> findComponents(LongSet solid) {
         List<Component> components = new ArrayList<>();
-        Set<BlockPos> visited = new HashSet<>();
-        for (BlockPos start : solid) {
+        LongOpenHashSet visited = new LongOpenHashSet();
+        for (LongIterator it = solid.iterator(); it.hasNext();) {
+            long start = it.nextLong();
             if (!visited.add(start)) continue;
             Component component = new Component();
-            Deque<BlockPos> queue = new ArrayDeque<>();
-            queue.add(start);
+            LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
+            queue.enqueue(start);
             while (!queue.isEmpty()) {
-                BlockPos pos = queue.poll();
-                component.add(pos);
+                long packed = queue.dequeueLong();
+                BlockPos pos = BlockPos.fromLong(packed);
+                component.add(packed, pos);
                 for (int[] offset : NEIGHBOR_OFFSETS) {
-                    BlockPos neighbor = pos.add(offset[0], offset[1], offset[2]);
+                    long neighbor = pos.add(offset[0], offset[1], offset[2]).toLong();
                     if (solid.contains(neighbor) && visited.add(neighbor)) {
-                        queue.add(neighbor);
+                        queue.enqueue(neighbor);
                     }
                 }
             }
@@ -121,7 +125,7 @@ public final class BodySplitter {
 
     private static final class Component {
 
-        private final Set<BlockPos> blocks = new HashSet<>();
+        private final LongOpenHashSet blocks = new LongOpenHashSet();
         private int minX = Integer.MAX_VALUE;
         private int minY = Integer.MAX_VALUE;
         private int minZ = Integer.MAX_VALUE;
@@ -129,8 +133,8 @@ public final class BodySplitter {
         private int maxY = Integer.MIN_VALUE;
         private int maxZ = Integer.MIN_VALUE;
 
-        private void add(BlockPos pos) {
-            blocks.add(pos);
+        private void add(long packed, BlockPos pos) {
+            blocks.add(packed);
             minX = Math.min(minX, pos.getX());
             minY = Math.min(minY, pos.getY());
             minZ = Math.min(minZ, pos.getZ());

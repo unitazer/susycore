@@ -108,7 +108,7 @@ public class SubWorldPlot {
         }
         SubWorldPlot owner = container.getPlot(chunkX, chunkZ);
         if (owner == null || !owner.inBounds(chunkX, chunkZ)) {
-            SusyLog.logger.warn("SubWorldPlot: growth of {} did not claim chunk ({}, {})", this, chunkX, chunkZ);
+            SusyLog.logger.warn("growth of {} did not claim chunk ({}, {})", this, chunkX, chunkZ);
             return null;
         }
         return owner.chunkFor(chunkX, chunkZ);

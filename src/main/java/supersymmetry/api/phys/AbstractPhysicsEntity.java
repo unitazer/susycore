@@ -12,6 +12,8 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 
+import supersymmetry.api.util.Quaternion;
+
 public class AbstractPhysicsEntity extends Entity {
 
     private static final DataParameter<Quaternion> ROTATION = EntityDataManager.createKey(AbstractPhysicsEntity.class,

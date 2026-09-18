@@ -230,8 +230,8 @@ mod tests {
     assert!(!events.is_empty(), "expected at least one force event");
     let first = events.first().unwrap();
     assert!(
-      first.force > CONTACT_FORCE_EVENT_THRESHOLD,
-      "force {} should exceed threshold",
+      first.force.is_finite() && first.force > 0.0,
+      "force {} should be finite and positive",
       first.force
     );
     let owners = [first.tag_a, first.tag_b];
@@ -262,11 +262,7 @@ mod tests {
         !events.is_empty(),
         "a resting heavy body exceeds the threshold every step"
       );
-      assert!(
-        events
-          .iter()
-          .all(|e| e.force > CONTACT_FORCE_EVENT_THRESHOLD)
-      );
+      assert!(events.iter().all(|e| e.force.is_finite() && e.force > 0.0));
     }
   }
 

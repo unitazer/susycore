@@ -17,7 +17,7 @@ import gregtech.api.network.IClientExecutor;
 import gregtech.api.network.IPacket;
 import supersymmetry.api.phys.BlockStateInfo;
 import supersymmetry.api.phys.PhysicsWorldEntity;
-import supersymmetry.api.phys.Quaternion;
+import supersymmetry.api.util.Quaternion;
 
 public class SPacketSubworldPlotSync implements IPacket, IClientExecutor {
 
@@ -69,7 +69,13 @@ public class SPacketSubworldPlotSync implements IPacket, IClientExecutor {
         buf.writeInt(this.originChunkZ);
         buf.writeInt(this.sizeChunksX);
         buf.writeInt(this.sizeChunksZ);
-        PhysicsWorldEntity.writePose(buf, this.rot, this.rp, this.size);
+        this.rot.writeToBuf(buf);
+        buf.writeFloat((float) this.rp.x);
+        buf.writeFloat((float) this.rp.y);
+        buf.writeFloat((float) this.rp.z);
+        buf.writeFloat(this.size[0]);
+        buf.writeFloat(this.size[1]);
+        buf.writeFloat(this.size[2]);
         BlockStateInfo.writeBlocks(buf, this.blocks);
     }
 
@@ -81,7 +87,7 @@ public class SPacketSubworldPlotSync implements IPacket, IClientExecutor {
             this.originChunkZ = buf.readInt();
             this.sizeChunksX = buf.readInt();
             this.sizeChunksZ = buf.readInt();
-            this.rot = PhysicsWorldEntity.readRotation(buf);
+            this.rot = Quaternion.readFromBuf(buf);
             this.rp = new Vec3d(buf.readFloat(), buf.readFloat(), buf.readFloat());
             this.size = new float[] { buf.readFloat(), buf.readFloat(), buf.readFloat() };
             this.blocks = BlockStateInfo.readBlocks(buf);

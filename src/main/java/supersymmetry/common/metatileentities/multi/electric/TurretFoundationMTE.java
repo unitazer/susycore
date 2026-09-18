@@ -157,13 +157,11 @@ public class TurretFoundationMTE extends MultiblockWithDisplayBase {
         }
         TestingBarrelMTE gun = findGun();
         if (gun == null || !gun.isStructureFormed() || gun.structurePattern == null) {
-            SusyLog.logger.warn("TurretFoundationMTE: no formed gun controller found {} blocks above {}",
-                    GUN_OFFSET_Y, getPos());
+            SusyLog.logger.warn("no formed gun controller {} blocks above {}", GUN_OFFSET_Y, getPos());
             return;
         }
         if (PhysicsWorldEntity.forBlockPos(world, gun.getPos()) != null) {
-            SusyLog.logger.warn("TurretFoundationMTE: gun controller {} already sits inside a physics body",
-                    gun.getPos());
+            SusyLog.logger.warn("gun controller {} already sits inside a physics body", gun.getPos());
             return;
         }
 
@@ -174,9 +172,8 @@ public class TurretFoundationMTE extends MultiblockWithDisplayBase {
         float sy = (float) (box.maxY - box.minY);
         float sz = (float) (box.maxZ - box.minZ);
         if (sy > PhysicsBodyFormation.MAX_CHILD_SIZE_Y) {
-            SusyLog.logger.error(
-                    "TurretFoundationMTE: gun height {} exceeds the {} block interaction height cap, not forming",
-                    sy, PhysicsBodyFormation.MAX_CHILD_SIZE_Y);
+            SusyLog.logger.error("gun height {} exceeds the {} block cap, not forming", sy,
+                    PhysicsBodyFormation.MAX_CHILD_SIZE_Y);
             return;
         }
 

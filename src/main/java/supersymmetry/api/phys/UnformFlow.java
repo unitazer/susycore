@@ -2,9 +2,7 @@ package supersymmetry.api.phys;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.nbt.NBTTagCompound;
@@ -19,7 +17,10 @@ import org.jetbrains.annotations.Nullable;
 
 import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntityHolder;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import supersymmetry.api.block.BlockExtraDataRegistry;
 import supersymmetry.api.subworld.SubWorldRegistry;
+import supersymmetry.api.util.Quaternion;
 
 public final class UnformFlow {
 
@@ -60,11 +61,11 @@ public final class UnformFlow {
         RigidPose pose = entity.currentPose();
         Rotation rotation = snappedRotation(entity.getRotation());
         List<Placement> placements = new ArrayList<>(blocks.size());
-        Set<BlockPos> targets = new HashSet<>();
+        LongOpenHashSet targets = new LongOpenHashSet();
         for (BlockStateInfo info : blocks) {
             Vec3d worldPoint = pose.worldFromPlotLocal(new Vec3d(info.pos));
             BlockPos target = new BlockPos(worldPoint.x, worldPoint.y, worldPoint.z);
-            if (target.getY() < 0 || target.getY() > 255 || !targets.add(target) ||
+            if (target.getY() < 0 || target.getY() > 255 || !targets.add(target.toLong()) ||
                     SubWorldRegistry.inPlotArea(world, target.getX() >> 4, target.getZ() >> 4, 0) ||
                     !world.getBlockState(target).getMaterial().isReplaceable()) {
                 return null;
@@ -114,7 +115,7 @@ public final class UnformFlow {
             }
         }
         if (placement.extra != null) {
-            BlockExtraStateTransfer.restore(world, placement.state.getBlock(), placement.pos, placement.extra);
+            BlockExtraDataRegistry.restore(world, placement.state.getBlock(), placement.pos, placement.extra);
         }
     }
 

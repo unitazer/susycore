@@ -3,6 +3,8 @@ package supersymmetry.api.phys;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
 
+import supersymmetry.api.util.Quaternion;
+
 public record Sphere(float radius) implements IShape {
 
     public ShapeType type() {

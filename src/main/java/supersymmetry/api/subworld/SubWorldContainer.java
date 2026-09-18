@@ -133,7 +133,6 @@ public final class SubWorldContainer {
         }
         SubWorldAllocator.Rect oldBounds = rect.copy();
         if (this.allocator.expand(rect, west, north, east, south)) {
-            SusyLog.logger.info("[susy-growth] plot {} grew in place: {} -> {}", plot, oldBounds, rect);
             this.rebuildIndex(plot, oldBounds);
             plot.seedLight();
             this.onAllocatorChanged();
@@ -142,12 +141,10 @@ public final class SubWorldContainer {
         }
         SubWorldPlot moved = this.relocate(plot, chunkX, chunkZ, west, north, east, south);
         if (moved == null) {
-            SusyLog.logger.warn("SubWorldContainer: failed to grow plot {} to cover chunk ({}, {})", plot, chunkX,
-                    chunkZ);
+            SusyLog.logger.warn("failed to grow plot {} to cover chunk ({}, {})", plot, chunkX, chunkZ);
             return false;
         }
         this.onAllocatorChanged();
-        SusyLog.logger.info("[susy-growth] plot {} grew by relocation: {} -> {}", plot, rect, moved.getRect());
         moved.seedLight();
         this.notifyGrowth(plot, moved, west * 16, north * 16, (moved.getOriginChunkX() + west - oldBounds.x) * 16,
                 (moved.getOriginChunkZ() + north - oldBounds.z) * 16);
@@ -169,24 +166,21 @@ public final class SubWorldContainer {
         if (target == null) {
             try {
                 target = this.allocator.allocate(newW, newH);
-                SusyLog.logger.warn("SubWorldContainer: plot {} relocated to {} without preserving content heap coords",
-                        plot, target);
+                SusyLog.logger.warn("plot {} relocated to {} without preserving content heap coords", plot, target);
             } catch (IllegalStateException e) {
                 target = null;
             }
         }
         if (target == null) {
             this.allocator.reoccupy(rect);
-            SusyLog.logger.warn("SubWorldContainer: no free space to relocate plot {} while growing to ({}, {})", plot,
-                    chunkX, chunkZ);
+            SusyLog.logger.warn("no free space to relocate plot {} while growing to ({}, {})", plot, chunkX, chunkZ);
             return null;
         }
         SubWorldAllocator.Rect oldBounds = rect.copy();
         int dx = target.x + west - rect.x;
         int dz = target.z + north - rect.z;
         if (dx != 0 || dz != 0) {
-            SusyLog.logger.warn("SubWorldContainer: plot {} relocated to {} without preserving content heap coords",
-                    plot, target);
+            SusyLog.logger.warn("plot {} relocated to {} without preserving content heap coords", plot, target);
         }
         plot.unregisterAllChunks();
         SubWorldPlot moved = new SubWorldPlot(this.world, target);

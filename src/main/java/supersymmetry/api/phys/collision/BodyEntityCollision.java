@@ -25,9 +25,9 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 import org.jetbrains.annotations.Nullable;
 
 import supersymmetry.api.phys.PhysicsWorldEntity;
-import supersymmetry.api.phys.Quaternion;
 import supersymmetry.api.phys.RigidPose;
 import supersymmetry.api.subworld.SubWorldPlot;
+import supersymmetry.api.util.Quaternion;
 
 public final class BodyEntityCollision {
 
@@ -61,7 +61,7 @@ public final class BodyEntityCollision {
             AXIS_Y.scale(-1.0) };
     private static final Vec3d FULL_CUBE_HALF_EXTENTS = new Vec3d(0.5, 0.5, 0.5);
 
-    private static final Map<Entity, long[]> STUCK_TICKS = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<Entity, StuckState> STUCK_TICKS = Collections.synchronizedMap(new WeakHashMap<>());
 
     private BodyEntityCollision() {}
 
@@ -90,13 +90,7 @@ public final class BodyEntityCollision {
 
     @Nullable public static MoveResult resolveMotion(Entity entity, MoverType moverType, Vec3d motion) {
         if (entity.isDead || entity.noClip || entity instanceof PhysicsWorldEntity) return null;
-        IBodyRider rider = (IBodyRider) entity;
-        PhysicsWorldEntity tracked = rider.susy$getTrackingBody();
-        if (tracked != null && (tracked.isDead || tracked.world != entity.world || tracked.getPlot() == null ||
-                entity.isRiding() || !stillOverBody(entity, tracked))) {
-            rider.susy$setTrackingBody(null);
-            tracked = null;
-        }
+        PhysicsWorldEntity tracked = refreshTracking(entity);
         Vec3d start = entity.getPositionVector();
         AxisAlignedBB sweptWorldBox = boxAt(entity, start).union(boxAt(entity, start.add(motion)));
         List<PhysicsWorldEntity> bodies = candidateBodies(entity, sweptWorldBox);
@@ -106,20 +100,8 @@ public final class BodyEntityCollision {
         }
         int substeps = substepCount(entity, motion, bodies);
         BlockPos.MutableBlockPos scratchPos = new BlockPos.MutableBlockPos();
-        List<BodyBlocks> bodyColliders = new ArrayList<>(bodies.size());
-        BodyBlocks trackedEntry = null;
-        for (PhysicsWorldEntity body : bodies) {
-            BodyBlocks entry = new BodyBlocks(body,
-                    collectBlocks(entity, body, body.currentPose(), sweptWorldBox, sweepMargin(body), scratchPos));
-            bodyColliders.add(entry);
-            if (body == tracked) trackedEntry = entry;
-        }
-        if (tracked != null && trackedEntry == null) {
-            trackedEntry = new BodyBlocks(tracked,
-                    collectBlocks(entity, tracked, tracked.currentPose(), sweptWorldBox, sweepMargin(tracked),
-                            scratchPos));
-            bodyColliders.add(trackedEntry);
-        }
+        List<BodyBlocks> bodyColliders = collectColliders(entity, bodies, tracked, sweptWorldBox, scratchPos);
+        BodyBlocks trackedEntry = tracked == null ? null : findEntry(bodyColliders, tracked);
         beginSteps(bodyColliders, substeps, substeps);
         if (stuckTicks(entity) < ESCAPE_TICK_THRESHOLD) {
             motion = clampSneaking(entity, moverType, motion, bodyColliders);
@@ -136,9 +118,9 @@ public final class BodyEntityCollision {
             }
             pos = pushOut(entity, pos, bodyColliders, contact);
             Vec3d disp = motion.scale(1.0 / substeps);
-            pos = clipAxis(entity, pos, disp.y, 1, bodyColliders, contact, false);
-            pos = clipAxis(entity, pos, disp.x, 0, bodyColliders, contact, true);
-            pos = clipAxis(entity, pos, disp.z, 2, bodyColliders, contact, true);
+            pos = clipAxis(entity, pos, disp.y, AXIS_Y, bodyColliders, contact, false);
+            pos = clipAxis(entity, pos, disp.x, AXIS_X, bodyColliders, contact, true);
+            pos = clipAxis(entity, pos, disp.z, AXIS_Z, bodyColliders, contact, true);
         }
         pos = pushOut(entity, pos, bodyColliders, contact);
         Vec3d escape = null;
@@ -222,6 +204,40 @@ public final class BodyEntityCollision {
         }
     }
 
+    private static PhysicsWorldEntity refreshTracking(Entity entity) {
+        IBodyRider rider = (IBodyRider) entity;
+        PhysicsWorldEntity tracked = rider.susy$getTrackingBody();
+        if (tracked == null) return null;
+        if (tracked.isDead || tracked.world != entity.world || tracked.getPlot() == null || entity.isRiding() ||
+                !stillOverBody(entity, tracked)) {
+            rider.susy$setTrackingBody(null);
+            return null;
+        }
+        return tracked;
+    }
+
+    private static List<BodyBlocks> collectColliders(Entity entity, List<PhysicsWorldEntity> bodies,
+                                                     PhysicsWorldEntity tracked, AxisAlignedBB sweptWorldBox,
+                                                     BlockPos.MutableBlockPos scratchPos) {
+        List<BodyBlocks> entries = new ArrayList<>(bodies.size());
+        for (PhysicsWorldEntity body : bodies) {
+            entries.add(new BodyBlocks(body, collectBlocks(entity, body, body.currentPose(), sweptWorldBox,
+                    sweepMargin(body), scratchPos)));
+        }
+        if (tracked != null && findEntry(entries, tracked) == null) {
+            entries.add(new BodyBlocks(tracked, collectBlocks(entity, tracked, tracked.currentPose(), sweptWorldBox,
+                    sweepMargin(tracked), scratchPos)));
+        }
+        return entries;
+    }
+
+    private static BodyBlocks findEntry(List<BodyBlocks> entries, PhysicsWorldEntity body) {
+        for (BodyBlocks entry : entries) {
+            if (entry.body == body) return entry;
+        }
+        return null;
+    }
+
     private static Vec3d removeIntoSurface(Vec3d motion, Vec3d normal) {
         double into = motion.dotProduct(normal);
         if (into >= 0.0) return motion;
@@ -253,23 +269,17 @@ public final class BodyEntityCollision {
     }
 
     private static int stuckTicks(Entity entity) {
-        long[] state = STUCK_TICKS.get(entity);
-        return state == null ? 0 : (int) state[2];
+        StuckState state = STUCK_TICKS.get(entity);
+        return state == null ? 0 : state.current;
     }
 
     private static int updateStuckTicks(Entity entity, boolean stuck) {
-        long now = entity.world.getTotalWorldTime();
-        long[] state = STUCK_TICKS.get(entity);
+        StuckState state = STUCK_TICKS.get(entity);
         if (state == null) {
-            state = new long[] { now - 1, 0L, 0L };
+            state = new StuckState();
             STUCK_TICKS.put(entity, state);
         }
-        if (state[0] != now) {
-            state[1] = state[2];
-            state[0] = now;
-        }
-        state[2] = stuck ? state[1] + 1 : 0;
-        return (int) state[2];
+        return state.update(entity.world.getTotalWorldTime(), stuck);
     }
 
     @Nullable private static Vec3d findEscape(Entity entity, Vec3d pos, List<BodyBlocks> entries) {
@@ -362,13 +372,9 @@ public final class BodyEntityCollision {
             if (bestMtv == null) return pos;
             double length = bestMtv.length();
             Vec3d normal = bestMtv.scale(1.0 / length);
-            double upward = normal.y;
-            if (upward > VERTICAL_NORMAL_THRESHOLD) {
-                if (upward > FLOOR_NORMAL_THRESHOLD) normal = AXIS_Y;
-                contact.groundBody = bestEntry.body;
-                contact.groundNormal = normal;
-                contact.grounded = true;
-            } else if (upward < -VERTICAL_NORMAL_THRESHOLD) {
+            if (normal.y > VERTICAL_NORMAL_THRESHOLD) {
+                normal = recordGround(contact, normal, bestEntry.body);
+            } else if (normal.y < -VERTICAL_NORMAL_THRESHOLD) {
                 contact.ceilingNormal = normal;
             } else {
                 contact.wallNormal = normal;
@@ -378,10 +384,18 @@ public final class BodyEntityCollision {
         return pos;
     }
 
-    private static Vec3d clipAxis(Entity entity, Vec3d pos, double displacement, int axis, List<BodyBlocks> entries,
+    private static Vec3d recordGround(Contact contact, Vec3d normal, PhysicsWorldEntity body) {
+        if (normal.y > FLOOR_NORMAL_THRESHOLD) normal = AXIS_Y;
+        contact.groundBody = body;
+        contact.groundNormal = normal;
+        contact.grounded = true;
+        return normal;
+    }
+
+    private static Vec3d clipAxis(Entity entity, Vec3d pos, double displacement, Vec3d axis, List<BodyBlocks> entries,
                                   Contact contact, boolean allowStepUp) {
         if (displacement == 0.0) return pos;
-        Vec3d direction = axisUnit(axis).scale(Math.signum(displacement));
+        Vec3d direction = axis.scale(Math.signum(displacement));
         double distance = Math.abs(displacement);
         AxisAlignedBB box = boxAt(entity, pos);
         double allowed = distance;
@@ -403,9 +417,7 @@ public final class BodyEntityCollision {
         }
         Vec3d normal = hitEntry.contactNormal(hitBlock, boxAt(entity, pos.add(direction.scale(allowed))));
         if (normal.y > VERTICAL_NORMAL_THRESHOLD) {
-            contact.groundBody = hitEntry.body;
-            contact.groundNormal = normal;
-            contact.grounded = true;
+            recordGround(contact, normal, hitEntry.body);
         } else if (normal.y < -VERTICAL_NORMAL_THRESHOLD) {
             contact.ceilingNormal = normal;
         } else if (allowStepUp) {
@@ -505,10 +517,6 @@ public final class BodyEntityCollision {
         return value > 0.0 ? value - SNEAK_SHAVE : value + SNEAK_SHAVE;
     }
 
-    private static Vec3d axisUnit(int axis) {
-        return axis == 0 ? AXIS_X : axis == 1 ? AXIS_Y : AXIS_Z;
-    }
-
     private static List<PlotBlock> collectBlocks(Entity entity, PhysicsWorldEntity body, RigidPose referencePose,
                                                  AxisAlignedBB sweptWorldBox, double poseShift,
                                                  BlockPos.MutableBlockPos scratchPos) {
@@ -522,71 +530,69 @@ public final class BodyEntityCollision {
         int maxZ = MathHelper.floor(plotLocalScan.maxZ);
         int minGy = MathHelper.floor(plotLocalScan.minY) + SubWorldPlot.RENDER_ORIGIN_Y;
         int maxGy = MathHelper.floor(plotLocalScan.maxY) + SubWorldPlot.RENDER_ORIGIN_Y;
-        int sizeX = plot.getSizeChunksX() * 16;
-        int sizeZ = plot.getSizeChunksZ() * 16;
-        if (maxX < 0 || minX >= sizeX || maxZ < 0 || minZ >= sizeZ || maxGy < 0 || minGy > 255) return blocks;
+        if (maxX < 0 || minX >= plot.getSizeChunksX() * 16 || maxZ < 0 || minZ >= plot.getSizeChunksZ() * 16 ||
+                maxGy < 0 || minGy > 255) {
+            return blocks;
+        }
+        PlotScan scan = new PlotScan(entity.world, referencePose, scratchPos, plot, minX, maxX, minZ, maxZ, minGy,
+                maxGy);
         int lxMin = Math.max(0, minX >> 4);
         int lxMax = Math.min(plot.getSizeChunksX() - 1, maxX >> 4);
         int lzMin = Math.max(0, minZ >> 4);
         int lzMax = Math.min(plot.getSizeChunksZ() - 1, maxZ >> 4);
         int lyMin = Math.max(0, minGy >> 4);
         int lyMax = Math.min(15, maxGy >> 4);
-        int originX = plot.getOriginChunkX() << 4;
-        int originZ = plot.getOriginChunkZ() << 4;
-        World world = entity.world;
         for (int ly = lyMin; ly <= lyMax; ly++) {
             for (int lx = lxMin; lx <= lxMax; lx++) {
-                int gxMin = Math.max(minX, lx << 4);
-                int gxMax = Math.min(maxX, (lx << 4) + 15);
                 for (int lz = lzMin; lz <= lzMax; lz++) {
                     Chunk chunk = plot.getLoadedChunk(plot.getOriginChunkX() + lx, plot.getOriginChunkZ() + lz);
                     if (chunk == null) continue;
-                    ExtendedBlockStorage storage = chunk.getBlockStorageArray()[ly];
-                    if (storage == null || storage.isEmpty()) continue;
-                    int gzMin = Math.max(minZ, lz << 4);
-                    int gzMax = Math.min(maxZ, (lz << 4) + 15);
-                    int gyMin = Math.max(minGy, ly << 4);
-                    int gyMax = Math.max(maxGy, (ly << 4) + 15);
-                    for (int gx = gxMin; gx <= gxMax; gx++) {
-                        for (int gy = gyMin; gy <= gyMax; gy++) {
-                            for (int gz = gzMin; gz <= gzMax; gz++) {
-                                IBlockState state = storage.get(gx & 15, gy & 15, gz & 15);
-                                if (state.getMaterial() == Material.AIR) continue;
-                                addPlotBlock(blocks, world, state, gx, gy, gz, originX, originZ, referencePose,
-                                        scratchPos);
-                            }
-                        }
-                    }
+                    collectSubchunk(blocks, scan, chunk.getBlockStorageArray()[ly], lx, ly, lz);
                 }
             }
         }
         return blocks;
     }
 
-    private static void addPlotBlock(List<PlotBlock> blocks, World world, IBlockState state, int gx, int gy, int gz,
-                                     int originX, int originZ, RigidPose pose,
-                                     BlockPos.MutableBlockPos scratchPos) {
-        double plotLocalCenterX = gx + 0.5;
-        double plotLocalCenterY = gy - SubWorldPlot.RENDER_ORIGIN_Y + 0.5;
-        double plotLocalCenterZ = gz + 0.5;
-        if (!state.isFullCube()) {
-            scratchPos.setPos(originX + gx, gy, originZ + gz);
-            AxisAlignedBB blockRelative = state.getBlock().getCollisionBoundingBox(state, world, scratchPos);
-            if (blockRelative == null) return;
-            plotLocalCenterX += (blockRelative.minX + blockRelative.maxX) * 0.5 - 0.5;
-            plotLocalCenterY += (blockRelative.minY + blockRelative.maxY) * 0.5 - 0.5;
-            plotLocalCenterZ += (blockRelative.minZ + blockRelative.maxZ) * 0.5 - 0.5;
-            blocks.add(new PlotBlock(gx, gy - SubWorldPlot.RENDER_ORIGIN_Y, gz,
-                    pose.bodyRelativeFromPlotLocal(new Vec3d(plotLocalCenterX, plotLocalCenterY, plotLocalCenterZ)),
-                    new Vec3d((blockRelative.maxX - blockRelative.minX) * 0.5,
-                            (blockRelative.maxY - blockRelative.minY) * 0.5,
-                            (blockRelative.maxZ - blockRelative.minZ) * 0.5),
-                    false));
-            return;
+    private static void collectSubchunk(List<PlotBlock> blocks, PlotScan scan, ExtendedBlockStorage storage,
+                                        int lx, int ly, int lz) {
+        if (storage == null || storage.isEmpty()) return;
+        int gxMin = Math.max(scan.minX, lx << 4);
+        int gxMax = Math.min(scan.maxX, (lx << 4) + 15);
+        int gzMin = Math.max(scan.minZ, lz << 4);
+        int gzMax = Math.min(scan.maxZ, (lz << 4) + 15);
+        int gyMin = Math.max(scan.minGy, ly << 4);
+        int gyMax = Math.max(scan.maxGy, (ly << 4) + 15);
+        for (int gx = gxMin; gx <= gxMax; gx++) {
+            for (int gy = gyMin; gy <= gyMax; gy++) {
+                for (int gz = gzMin; gz <= gzMax; gz++) {
+                    IBlockState state = storage.get(gx & 15, gy & 15, gz & 15);
+                    if (state.getMaterial() == Material.AIR) continue;
+                    addPlotBlock(blocks, state, scan, gx, gy, gz);
+                }
+            }
+        }
+    }
+
+    private static void addPlotBlock(List<PlotBlock> blocks, IBlockState state, PlotScan scan, int gx, int gy,
+                                     int gz) {
+        boolean fullCube = state.isFullCube();
+        double centerX = gx + 0.5;
+        double centerY = gy - SubWorldPlot.RENDER_ORIGIN_Y + 0.5;
+        double centerZ = gz + 0.5;
+        Vec3d halfExtents = FULL_CUBE_HALF_EXTENTS;
+        if (!fullCube) {
+            scan.scratchPos.setPos(scan.originX + gx, gy, scan.originZ + gz);
+            AxisAlignedBB shape = state.getCollisionBoundingBox(scan.world, scan.scratchPos);
+            if (shape == null) return;
+            centerX += (shape.minX + shape.maxX) * 0.5 - 0.5;
+            centerY += (shape.minY + shape.maxY) * 0.5 - 0.5;
+            centerZ += (shape.minZ + shape.maxZ) * 0.5 - 0.5;
+            halfExtents = new Vec3d((shape.maxX - shape.minX) * 0.5, (shape.maxY - shape.minY) * 0.5,
+                    (shape.maxZ - shape.minZ) * 0.5);
         }
         blocks.add(new PlotBlock(gx, gy - SubWorldPlot.RENDER_ORIGIN_Y, gz,
-                pose.bodyRelativeFromPlotLocal(new Vec3d(plotLocalCenterX, plotLocalCenterY, plotLocalCenterZ)),
-                FULL_CUBE_HALF_EXTENTS, true));
+                scan.pose.bodyRelativeFromPlotLocal(new Vec3d(centerX, centerY, centerZ)), halfExtents, fullCube));
     }
 
     private static AxisAlignedBB boxAt(Entity entity, Vec3d pos) {
@@ -802,5 +808,51 @@ public final class BodyEntityCollision {
         private Vec3d ceilingNormal;
         private Vec3d wallNormal;
         private boolean grounded;
+    }
+
+    private static final class StuckState {
+
+        private long tick;
+        private int previous;
+        private int current;
+
+        private int update(long now, boolean stuck) {
+            if (tick != now) {
+                previous = current;
+                tick = now;
+            }
+            current = stuck ? previous + 1 : 0;
+            return current;
+        }
+    }
+
+    private static final class PlotScan {
+
+        private final World world;
+        private final RigidPose pose;
+        private final BlockPos.MutableBlockPos scratchPos;
+        private final int originX;
+        private final int originZ;
+        private final int minX;
+        private final int maxX;
+        private final int minZ;
+        private final int maxZ;
+        private final int minGy;
+        private final int maxGy;
+
+        private PlotScan(World world, RigidPose pose, BlockPos.MutableBlockPos scratchPos, SubWorldPlot plot,
+                         int minX, int maxX, int minZ, int maxZ, int minGy, int maxGy) {
+            this.world = world;
+            this.pose = pose;
+            this.scratchPos = scratchPos;
+            this.originX = plot.getOriginChunkX() << 4;
+            this.originZ = plot.getOriginChunkZ() << 4;
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
+            this.minGy = minGy;
+            this.maxGy = maxGy;
+        }
     }
 }

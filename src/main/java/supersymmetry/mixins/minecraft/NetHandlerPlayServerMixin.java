@@ -110,9 +110,8 @@ public abstract class NetHandlerPlayServerMixin {
         Vec3d plotLocalFeet = body.currentPose().plotLocalFromWorld(player.getPositionVector());
         double sqDist = plotLocalFeet.squareDistanceTo(plotLocalTarget);
         if (sqDist >= 64.0) {
-            SusyLog.logger.debug(
-                    "[susy-growth] use reach reject: feet={} target={} sqDist={} (vanilla rejects >= 64.0)",
-                    plotLocalFeet, plotLocalTarget, sqDist);
+            SusyLog.logger.debug("use reach reject: feet={} target={} sqDist={}", plotLocalFeet, plotLocalTarget,
+                    sqDist);
         }
         return sqDist;
     }
@@ -143,7 +142,7 @@ public abstract class NetHandlerPlayServerMixin {
         double sqDist = plotLocalEyes.squareDistanceTo(plotLocalTarget);
         double sqLimit = square(reach.getAttributeValue() + 1.0);
         if (sqDist > sqLimit) {
-            SusyLog.logger.debug("[susy-growth] dig reach reject: eyes={} target={} sqDist={} limit={}", plotLocalEyes,
+            SusyLog.logger.debug("dig reach reject: eyes={} target={} sqDist={} limit={}", plotLocalEyes,
                     plotLocalTarget, sqDist, sqLimit);
             return DIG_REJECT_ZERO_LIMIT;
         }

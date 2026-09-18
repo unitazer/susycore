@@ -3,7 +3,8 @@ package supersymmetry.api.phys;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
 
-// information for the rust side to reconstruct shapes
+import supersymmetry.api.util.Quaternion;
+
 public interface IShape {
 
     public ShapeType type();

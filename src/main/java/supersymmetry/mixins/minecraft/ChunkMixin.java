@@ -16,11 +16,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import supersymmetry.api.SusyLog;
 import supersymmetry.api.phys.BodySplitter;
 import supersymmetry.api.phys.ChunkSyncManager;
 import supersymmetry.api.phys.PhysicsWorldEntity;
-import supersymmetry.api.subworld.SubWorldAllocator;
 import supersymmetry.api.subworld.SubWorldPlot;
 import supersymmetry.api.subworld.SubWorldRegistry;
 import supersymmetry.client.renderer.subworld.SubWorldChunkRenderer;
@@ -48,10 +46,6 @@ public class ChunkMixin {
 
         if (this.world.isRemote) {
             SubWorldPlot clientPlot = SubWorldRegistry.find(this.world, this.x, this.z);
-            if (clientPlot == null && SubWorldAllocator.isInHeapRegion(this.x, this.z)) {
-                SusyLog.logger.debug("[susy-growth] client block write into void chunk at heap {} (chunk {}, {})", pos,
-                        this.x, this.z);
-            }
             SubWorldChunkRenderer.markSectionDirty(this.world, pos);
             PhysicsWorldEntity body = PhysicsWorldEntity.forPlot(clientPlot);
             if (body != null) {
@@ -65,16 +59,6 @@ public class ChunkMixin {
         if (csm != null) csm.handleBlockChange(pos);
 
         PhysicsWorldEntity body = PhysicsWorldEntity.forPlot(plot);
-        if (SubWorldAllocator.isInHeapRegion(this.x, this.z)) {
-            if (body == null) {
-                SusyLog.logger.debug("[susy-growth] server block change at heap {} chunk ({}, {}) body=none plot={}",
-                        pos, this.x, this.z, plot);
-            } else {
-                SusyLog.logger.debug(
-                        "[susy-growth] server block change at heap {} chunk ({}, {}) body=present local={}", pos,
-                        this.x, this.z, body.getLocalPos(pos));
-            }
-        }
         if (body != null) {
             BlockPos localPos = body.getLocalPos(pos);
             if (localPos != null) {

@@ -34,6 +34,7 @@ import supersymmetry.api.phys.DebugSphereEntity;
 import supersymmetry.api.phys.PhysicsBodyFormation;
 import supersymmetry.api.phys.PhysicsWorldEntity;
 import supersymmetry.api.phys.Rapier;
+import supersymmetry.api.phys.RigidPose;
 import supersymmetry.api.subworld.SubWorldPlot;
 
 public class TestingMTE extends MultiblockWithDisplayBase {
@@ -165,12 +166,12 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                         "impulse",
                         (clickData -> {
                             if (spawned == null || spawned.isDead || !spawned.hasPhysicsBody()) return;
-                            double[] pose = Rapier.getChunkletBodyPose(this.getWorld(), spawned.getEntityId());
+                            RigidPose pose = Rapier.getBodyPose(this.getWorld(), spawned.getEntityId());
                             if (pose == null) return;
                             float[] size = spawned.getPlotSize();
                             Vec3d point = spawned.worldPointFromLocal(new BlockPos(
                                     (int) (size[0] / 2), (int) (size[1] / 2) + 1, (int) (size[2] / 2)));
-                            spawned.applyImpulseAtPoint(point, new Vec3d(pose[10] * 5, 0, 0));
+                            spawned.applyImpulseAtPoint(point, new Vec3d(pose.velocity.x * 5, 0, 0));
                         })));
         builder.widget(
                 new ClickButtonWidget(
@@ -219,9 +220,7 @@ public class TestingMTE extends MultiblockWithDisplayBase {
             float sz = (float) (box.maxZ - box.minZ);
 
             if (sy > PhysicsBodyFormation.MAX_CHILD_SIZE_Y) {
-                SusyLog.logger.error(
-                        "TestingMTE: pattern height {} exceeds the {} block interaction height cap, not spawning a physics body",
-                        sy,
+                SusyLog.logger.error("pattern height {} exceeds the {} block cap, not spawning a physics body", sy,
                         PhysicsBodyFormation.MAX_CHILD_SIZE_Y);
                 return;
             }

@@ -14,7 +14,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import supersymmetry.api.subworld.SubWorldAllocator;
 import supersymmetry.api.subworld.SubWorldRegistry;
 import supersymmetry.api.subworld.SubWorldVoidChunks;
-import supersymmetry.api.subworld.SubWorldVoidFallbacks;
 
 @Mixin(ChunkProviderClient.class)
 public abstract class ChunkProviderClientMixin {
@@ -27,7 +26,7 @@ public abstract class ChunkProviderClientMixin {
     private void susy$routePlotLoadChunk(int chunkX, int chunkZ, CallbackInfoReturnable<Chunk> cir) {
         Chunk chunk = SubWorldRegistry.getPlotChunk(this.world, chunkX, chunkZ);
         if (chunk == null && SubWorldAllocator.isInHeapRegion(chunkX, chunkZ)) {
-            chunk = SubWorldVoidFallbacks.get(this.world, "client", chunkX, chunkZ);
+            chunk = SubWorldVoidChunks.get(this.world, chunkX, chunkZ);
         }
         if (chunk != null) {
             cir.setReturnValue(chunk);
@@ -38,7 +37,7 @@ public abstract class ChunkProviderClientMixin {
     private void susy$onProvideChunk(int x, int z, CallbackInfoReturnable<Chunk> cir) {
         Chunk chunk = SubWorldRegistry.getPlotChunk(this.world, x, z);
         if (chunk == null && SubWorldAllocator.isInHeapRegion(x, z)) {
-            chunk = SubWorldVoidFallbacks.get(this.world, "client", x, z);
+            chunk = SubWorldVoidChunks.get(this.world, x, z);
         }
         if (chunk != null) {
             cir.setReturnValue(chunk);

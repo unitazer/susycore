@@ -6,6 +6,8 @@ import net.minecraft.network.PacketBuffer;
 import net.minecraft.network.datasync.DataParameter;
 import net.minecraft.network.datasync.DataSerializer;
 
+import supersymmetry.api.util.Quaternion;
+
 public final class QuaternionDataSerializer implements DataSerializer<Quaternion> {
 
     public static final QuaternionDataSerializer INSTANCE = new QuaternionDataSerializer();

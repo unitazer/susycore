@@ -2,10 +2,10 @@ package supersymmetry.api.util;
 
 import java.util.Objects;
 
+import net.minecraft.network.PacketBuffer;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
 
-// immutable just because i saw someone else implement it like that, so i may be wrong
 public final class Quaternion {
 
     public static final Quaternion IDENTITY = new Quaternion();
@@ -41,7 +41,6 @@ public final class Quaternion {
 
     public final double z;
 
-    // w=1 x=0 y=0 z=0
     public Quaternion() {
         this.w = 1;
         this.x = 0;
@@ -54,6 +53,20 @@ public final class Quaternion {
         this.x = x;
         this.y = y;
         this.z = z;
+    }
+
+    public void writeToBuf(PacketBuffer buf) {
+        buf.writeFloat((float) x);
+        buf.writeFloat((float) y);
+        buf.writeFloat((float) z);
+        buf.writeFloat((float) w);
+    }
+
+    public static Quaternion readFromBuf(PacketBuffer buf) {
+        float x = buf.readFloat();
+        float y = buf.readFloat();
+        float z = buf.readFloat();
+        return new Quaternion(buf.readFloat(), x, y, z);
     }
 
     public Quaternion(org.lwjgl.util.vector.Quaternion q) {
@@ -133,7 +146,6 @@ public final class Quaternion {
         return new AxisAlignedBB(minX, minY, minZ, maxX, maxY, maxZ);
     }
 
-    // this*(1-t)->other*t
     public Quaternion lerp(Quaternion other, double t) {
         double tt = 1 - t;
         return new Quaternion(
@@ -143,7 +155,6 @@ public final class Quaternion {
                 this.z * tt + other.z * t);
     }
 
-    // spherical linear interpolation where t is 0..1
     public Quaternion slerp(Quaternion other, double t) {
         if (t <= 0.0) return this;
         if (t >= 1.0) return other;
@@ -186,10 +197,6 @@ public final class Quaternion {
         if (!(o instanceof Quaternion)) return false;
         Quaternion q = (Quaternion) o;
         return w == q.w && x == q.x && y == q.y && z == q.z;
-    }
-
-    public boolean RoughlyEquals(Quaternion other, double epsilon) {
-        return 1.0 - Math.abs(this.dot(other)) < epsilon;
     }
 
     @Override
