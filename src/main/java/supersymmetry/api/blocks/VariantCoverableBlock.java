@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
 
+import net.minecraft.block.Block;
 import net.minecraft.block.ITileEntityProvider;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.properties.PropertyEnum;
@@ -51,18 +52,13 @@ public class VariantCoverableBlock<T extends Enum<T> & IStringSerializable>
     }
 
     @Override
-    public void breakBlock(World worldIn, BlockPos pos, IBlockState state) {
-        super.breakBlock(worldIn, pos, state);
-    }
-
-    @Override
-    public void getDrops(NonNullList<ItemStack> drops, IBlockAccess world, BlockPos pos, IBlockState state,
-                         int fortune) {
+    public void breakBlock(World world, BlockPos pos, IBlockState state) {
         if (world.getTileEntity(pos) instanceof TileEntityCoverable te) {
             ItemStack newStack = te.getCoverItem();
             newStack.setCount(te.getCoverCount());
-            drops.add(newStack);
+            Block.spawnAsEntity(world, pos, newStack);
         }
+        super.breakBlock(world, pos, state);
     }
 
     @Override
@@ -87,14 +83,13 @@ public class VariantCoverableBlock<T extends Enum<T> & IStringSerializable>
 
     @Override
     public boolean shouldSideBeRendered(IBlockState state, IBlockAccess world, BlockPos pos, EnumFacing face) {
-        return TileEntityCoverable.RENDER_SWITCH || !((TileEntityCoverable) world.getTileEntity(pos)).isCovered(face);
+        return super.shouldSideBeRendered(state, world, pos, face) &&
+                !((TileEntityCoverable) world.getTileEntity(pos)).isCovered(face);
     }
 
     @Override
     public EnumBlockRenderType getRenderType(IBlockState state) {
-        EnumBlockRenderType ret = TileEntityCoverable.RENDER_SWITCH ? VariantCoverableBlockRenderer.BLOCK_RENDER_TYPE :
-                EnumBlockRenderType.MODEL;
-        return ret;
+        return VariantCoverableBlockRenderer.BLOCK_RENDER_TYPE;
     }
 
     @Nullable public TileEntity createNewTileEntity(World worldIn, int meta) {

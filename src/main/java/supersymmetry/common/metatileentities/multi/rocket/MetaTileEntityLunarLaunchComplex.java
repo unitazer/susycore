@@ -1,5 +1,7 @@
 package supersymmetry.common.metatileentities.multi.rocket;
 
+import static gregtech.api.GTValues.*;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,7 +25,6 @@ import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.items.IItemHandlerModifiable;
-import net.minecraftforge.items.ItemHandlerHelper;
 
 import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.NonNull;
@@ -58,15 +59,16 @@ import gregtech.client.renderer.texture.Textures;
 import gregtech.common.blocks.BlockMetalCasing;
 import gregtech.common.blocks.BlockTurbineCasing;
 import gregtech.common.blocks.MetaBlocks;
-import supersymmetry.api.SusyLog;
 import supersymmetry.api.capability.SuSyDataCodes;
 import supersymmetry.api.gui.SusyGuiTextures;
 import supersymmetry.api.items.CargoItemStackHandler;
+import supersymmetry.api.metatileentity.IRocketFueler;
 import supersymmetry.api.metatileentity.multiblock.IRedstoneControllable;
 import supersymmetry.api.metatileentity.multiblock.IRocketAssemblyController;
+import supersymmetry.api.metatileentity.multiblock.SignalDispatch;
 import supersymmetry.api.recipes.SuSyRecipeMaps;
 import supersymmetry.api.recipes.logic.RocketAssemblerLogic;
-import supersymmetry.api.rocketry.components.AbstractComponent;
+import supersymmetry.api.rocketry.AssemblyStep;
 import supersymmetry.api.rocketry.fuels.LiquidRocketFuelEntry;
 import supersymmetry.api.rocketry.fuels.RocketFuelEntry;
 import supersymmetry.api.rocketry.rockets.AbstractRocketBlueprint;
@@ -77,7 +79,6 @@ import supersymmetry.client.renderer.textures.SusyTextures;
 import supersymmetry.common.blocks.BlockLunarConcrete;
 import supersymmetry.common.blocks.SuSyBlocks;
 import supersymmetry.common.entities.EntityLunarRocket;
-import supersymmetry.common.item.SuSyMetaItems;
 import supersymmetry.common.metatileentities.multiblockpart.MetaTileEntityComponentRedstoneController;
 import supersymmetry.common.mui.widget.ItemCostWidget;
 import supersymmetry.common.mui.widget.SlotWidgetMentallyStable;
@@ -96,32 +97,28 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
                                               implements
                                               IProgressBarMultiblock,
                                               IRedstoneControllable,
-                                              IRocketAssemblyController {
+                                              IRocketAssemblyController,
+                                              IRocketFueler {
 
     /** In liters per second, matching the launch pad. */
-    private static final int MAX_FUELING_SPEED = 8000;
+    private static final int MAX_FUELING_SPEED = 80000;
 
     private static final int ROCKET_OFFSET_BACK = 4;
     private static final int ROCKET_OFFSET_UP = 1;
 
     public DataStorageLoader blueprintSlot = new DataStorageLoader(this, x -> {
-        if (x.hasTagCompound()) {
-            NBTTagCompound tag = x.getTagCompound();
-            AbstractRocketBlueprint bp = AbstractRocketBlueprint.getCopyOf(tag.getString("name"));
-            return bp != null && bp.readFromNBT(tag) &&
-                    bp.getName().equals(SusyRocketComponents.ROCKET_LUNAR_BLUEPRINT_DEFAULT.getName()) &&
-                    bp.isFullBlueprint();
-        }
-        return false;
+        var bp = AbstractRocketBlueprint.fromItem(x);
+        return bp != null && bp.getName().equals(SusyRocketComponents.ROCKET_LUNAR_BLUEPRINT_DEFAULT.getName()) &&
+                bp.isFullBlueprint();
     });
 
     // Every component that has to be constructed, and how far through that list we
     // are.
-    public List<AbstractComponent<?>> componentList = new ArrayList<>();
+    public List<AssemblyStep> componentList = new ArrayList<>();
     public int componentIndex = 0;
     public boolean isAssemblyWorking = false;
 
-    private final List<Runnable> signalActions = new ArrayList<>();
+    private final SignalDispatch signals = new SignalDispatch();
 
     private LaunchComplexState state = LaunchComplexState.IDLE;
     private EntityLunarRocket selectedRocket;
@@ -143,18 +140,18 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
 
     public MetaTileEntityLunarLaunchComplex(ResourceLocation metaTileEntityId) {
         super(metaTileEntityId, SuSyRecipeMaps.ROCKET_ASSEMBLER);
-        signalActions.add(() -> {
+        signals.add(() -> {
             if (!this.blueprintSlot.isEmpty() && this.componentList.isEmpty()) {
                 this.startAssembly(this.getCurrentBlueprint());
             }
         });
-        signalActions.add(this::abortAssembly);
-        signalActions.add(() -> {
+        signals.add(this::abortAssembly);
+        signals.add(() -> {
             if (this.state == LaunchComplexState.LOADED) {
                 this.launchRequested = true;
             }
         });
-        this.recipeMapWorkable = new RocketAssemblerLogic(this);
+        this.recipeMapWorkable = new RocketAssemblerLogic(this, VA[HV], false);
     }
 
     @Override
@@ -166,20 +163,11 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     // ------------------------------------------------------------------------------------------------
 
     public AbstractRocketBlueprint getCurrentBlueprint() {
-        if (blueprintSlot.isEmpty())
-            return null;
-        NBTTagCompound tag = blueprintSlot.getStackInSlot(0).getTagCompound();
-        AbstractRocketBlueprint bp = AbstractRocketBlueprint.getCopyOf(tag.getString("name"));
-        if (bp != null && bp.readFromNBT(tag)) {
-            return bp;
-        }
-        SusyLog.logger.error("failed to read a blueprint {}", tag);
-        return null;
-        // hopefully never happens since its checked when the item is inserted
+        return blueprintSlot.getBlueprint();
     }
 
     public Recipe getCurrentRecipe() {
-        return isAssemblyWorking ? ((RocketAssemblerLogic) this.recipeMapWorkable).getRecipe(100000) : null;
+        return isAssemblyWorking ? ((RocketAssemblerLogic) this.recipeMapWorkable).getCurrentRecipe() : null;
     }
 
     public void startAssembly(AbstractRocketBlueprint bp) {
@@ -191,8 +179,7 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
         ((RocketAssemblerLogic) this.recipeMapWorkable).setInputsValid();
         this.componentIndex = 0;
         this.isAssemblyWorking = true;
-        this.componentList = bp.getStages().stream().flatMap(x -> x.getComponents().values().stream())
-                .flatMap(List::stream).collect(Collectors.toList());
+        this.componentList = bp.getAssemblySequence();
         this.blueprintSlot.setLocked(true);
         setComplexState(LaunchComplexState.ASSEMBLING);
     }
@@ -233,13 +220,11 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     }
 
     @Override
-    public AbstractComponent<?> getCurrentCraftTarget() {
-        if (isAssemblyWorking && componentList.size() >= componentIndex + 1) {
-            return this.componentList.get(this.componentIndex);
-        } else {
-            abortAssembly();
+    public AssemblyStep getCurrentStep() {
+        if (!isAssemblyWorking || componentIndex >= componentList.size()) {
+            return null;
         }
-        return null;
+        return this.componentList.get(this.componentIndex);
     }
 
     // meant to be called after a recipe is done
@@ -295,6 +280,7 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     public void spawnRocket(NBTTagCompound tag) {
         Vec3d position = getLaunchPosition();
         this.selectedRocket = new EntityLunarRocket(getWorld(), position, getFrontFacing().getHorizontalAngle());
+        selectedRocket.fueler = this;
         if (tag != null) {
             // Copy in all tags
             for (Map.Entry<String, NBTBase> info : tag.tagMap.entrySet()) {
@@ -314,6 +300,7 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
         if (rockets.isEmpty())
             return false;
         this.selectedRocket = rockets.get(0);
+        selectedRocket.fueler = this;
         return true;
     }
 
@@ -327,6 +314,9 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     @Override
     protected void updateFormedValid() {
         super.updateFormedValid(); // drives the assembly recipe logic
+        if (this.getWorld().provider.getDimension() != CelestialObjects.MOON.getDimension()) {
+            return;
+        }
         if (getWorld().isRemote)
             return;
 
@@ -352,9 +342,10 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
                     break;
                 }
                 if (getOffsetTimer() % 4 == 0) {
-                    setConfigWithinBudget(this.configurerSlot.program(this.selectedRocket));
+                    setConfigWithinBudget(this.configurerSlot.program(getWorld().provider.getDimension(),
+                            this.selectedRocket.getEntityData()));
                 }
-                if (!loadCargo() || !isLaunchAuthorized()) {
+                if (!loadCargo() || !isLaunchAuthorized() || !this.selectedRocket.canStartCountdown()) {
                     break;
                 }
                 setComplexState(LaunchComplexState.LAUNCHING);
@@ -401,7 +392,7 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     }
 
     private boolean loadRocketFuel() {
-        if (this.fuelingProgress >= this.selectedRocket.getFuelVolume()) {
+        if (isFuelingComplete()) {
             return true;
         }
         RocketFuelEntry fuelEntry = this.selectedRocket.getFuel();
@@ -474,7 +465,7 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
         if (loaded > 0) {
             setFuelingProgress(this.fuelingProgress + (int) Math.ceil(loaded * litersPerDust));
         }
-        return this.fuelingProgress >= this.selectedRocket.getFuelVolume();
+        return isFuelingComplete();
     }
 
     private boolean fuelLiquid(LiquidRocketFuelEntry fuelEntry) {
@@ -500,7 +491,7 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
             setFuelingProgress(this.fuelingProgress + (unitsDrained * totalMBPerUnit));
         }
 
-        return this.fuelingProgress >= this.selectedRocket.getFuelVolume();
+        return isFuelingComplete();
     }
 
     private void loadRocketCargo() {
@@ -510,18 +501,10 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
         IItemHandlerModifiable imports = getInputInventory();
         for (int i = 0; i < imports.getSlots(); i++) {
             ItemStack stack = imports.getStackInSlot(i);
-            if (stack.isEmpty() || isAssemblyConsumable(stack))
+            if (stack.isEmpty())
                 continue;
-            imports.setStackInSlot(i, ItemHandlerHelper.insertItemStacked(cargo, stack, false));
+            imports.setStackInSlot(i, cargo.insertItem(0, stack, false));
         }
-    }
-
-    /**
-     * Electrodes are spent building the rocket, not flown in it, so they stay
-     * behind for the next one.
-     */
-    private static boolean isAssemblyConsumable(ItemStack stack) {
-        return SuSyMetaItems.TUNGSTEN_ELECTRODE.getStackForm().isItemEqual(stack);
     }
 
     private void setComplexState(LaunchComplexState state) {
@@ -546,18 +529,9 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     // --- Redstone
     // ------------------------------------------------------------------------------------------------
 
-    public List<Runnable> getSignalActions() {
-        return signalActions;
-    }
-
     @Override
-    public int getSignalCeiling() {
-        return signalActions.size() - 1;
-    }
-
-    @Override
-    public void pulse(int sig) {
-        this.signalActions.get(sig).run();
+    public SignalDispatch signalDispatch() {
+        return signals;
     }
 
     // --- Structure
@@ -566,10 +540,7 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     @Override
     protected void formStructure(PatternMatchContext context) {
         super.formStructure(context);
-        if (this.getWorld().provider.getDimension() != CelestialObjects.MOON.getDimension()) {
-            invalidateStructure();
-            return;
-        }
+
         this.rocketAABB = getRocketAABB();
         if (findRocket()) {
             setComplexState(LaunchComplexState.LOADED);
@@ -610,13 +581,14 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
                 .aisle(floor, side1, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr)
                 .aisle(floor, side1, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr)
                 .aisle(selfp, edgee, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr, airrr)
-                .where('S', selfPredicate()).where('C', states(getFoundationState()))
-                .where('E', states(getFoundationState()).setMinGlobalLimited(30).or(autoAbilities())
+                .where('S', selfPredicate())
+                .where('C', states(getFoundationState()))
+                .where('E', states(getFoundationState()).setMinGlobalLimited(40).or(autoAbilities())
                         .or(MetaTileEntityComponentRedstoneController.controllerPredicate().setMaxGlobalLimited(2))
-                        .or(abilities(MultiblockAbility.IMPORT_ITEMS).setPreviewCount(1).setMinGlobalLimited(1)
-                                .setMaxGlobalLimited(2))
-                        .or(abilities(MultiblockAbility.IMPORT_FLUIDS).setPreviewCount(1).setMinGlobalLimited(1)
-                                .setMaxGlobalLimited(4)))
+                        .or(abilities(MultiblockAbility.IMPORT_ITEMS).setMinGlobalLimited(1)
+                                .setMaxGlobalLimited(2).setPreviewCount(1))
+                        .or(abilities(MultiblockAbility.IMPORT_FLUIDS).setMinGlobalLimited(1)
+                                .setMaxGlobalLimited(4).setPreviewCount(1)))
                 .where('T', states(MetaBlocks.METAL_CASING.getState(BlockMetalCasing.MetalCasingType.TITANIUM_STABLE)))
                 .where('G',
                         states(MetaBlocks.TURBINE_CASING
@@ -698,8 +670,12 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
         if (this.isAssemblyWorking && !this.blueprintSlot.isEmpty()) {
             AbstractRocketBlueprint bp = getCurrentBlueprint();
             if (bp != null) {
-                this.componentList = bp.getStages().stream().flatMap(x -> x.getComponents().values().stream())
-                        .flatMap(List::stream).collect(Collectors.toList());
+                this.componentList = bp.getAssemblySequence();
+            } else {
+                this.isAssemblyWorking = false;
+                this.componentIndex = 0;
+                this.blueprintSlot.setLocked(false);
+                this.state = LaunchComplexState.IDLE;
             }
         }
     }
@@ -793,14 +769,6 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     }
 
     @Override
-    protected void addWarningText(List<ITextComponent> textList) {
-        super.addWarningText(textList);
-        if (isAssemblyWorking && !((RocketAssemblerLogic) recipeMapWorkable).hasEnoughElectrodes) {
-            textList.add(new TextComponentTranslation("susy.machine.rocket_assembler.warning.no_electrodes"));
-        }
-    }
-
-    @Override
     protected ModularUI createUI(EntityPlayer entityPlayer) {
         return createUITemplate(entityPlayer).build(getHolder(), entityPlayer);
     }
@@ -870,11 +838,20 @@ public class MetaTileEntityLunarLaunchComplex extends RecipeMapMultiblockControl
     @Override
     public boolean onScrewdriverClick(EntityPlayer playerIn, EnumHand hand, EnumFacing facing,
                                       CuboidRayTraceResult hitResult) {
-        if (playerIn.isCreative() && this.getCurrentBlueprint() != null) {
+        if (!playerIn.world.isRemote && playerIn.isCreative() && this.getCurrentBlueprint() != null) {
             finishAssembly();
             return true;
         }
         return false;
+    }
+
+    public boolean isFuelingComplete() {
+        return this.fuelingProgress >= selectedRocket.getFuelVolume();
+    }
+
+    @Override
+    public void launch() {
+        this.setComplexState(LaunchComplexState.LAUNCHING);
     }
 
     public enum LaunchComplexState {

@@ -1,12 +1,22 @@
 package supersymmetry.common.metatileentities.multi.electric;
 
+import static supersymmetry.api.metatileentity.multiblock.SuSyPredicates.inductionCrucibles;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 import net.minecraft.client.resources.I18n;
+import net.minecraft.init.Blocks;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.network.PacketBuffer;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.text.ITextComponent;
+import net.minecraft.util.text.Style;
+import net.minecraft.util.text.TextComponentTranslation;
 import net.minecraft.util.text.TextFormatting;
 import net.minecraft.world.World;
 import net.minecraftforge.fluids.FluidStack;
@@ -18,6 +28,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jspecify.annotations.NonNull;
 
+import gregtech.api.GTValues;
 import gregtech.api.capability.impl.CommonFluidFilters;
 import gregtech.api.gui.GuiTextures;
 import gregtech.api.gui.resources.TextureArea;
@@ -26,20 +37,34 @@ import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.*;
 import gregtech.api.pattern.BlockPattern;
 import gregtech.api.pattern.FactoryBlockPattern;
+import gregtech.api.pattern.MultiblockShapeInfo;
+import gregtech.api.pattern.PatternMatchContext;
+import gregtech.api.recipes.Recipe;
 import gregtech.api.unification.material.Materials;
 import gregtech.api.util.TextComponentUtil;
+import gregtech.api.util.TextFormattingUtil;
 import gregtech.client.renderer.ICubeRenderer;
 import gregtech.client.renderer.texture.Textures;
 import gregtech.client.utils.TooltipHelper;
+import gregtech.common.ConfigHolder;
+import gregtech.common.blocks.BlockMetalCasing;
 import gregtech.common.blocks.BlockMetalCasing.MetalCasingType;
 import gregtech.common.blocks.MetaBlocks;
+import gregtech.common.metatileentities.MetaTileEntities;
+import supersymmetry.api.capability.SuSyDataCodes;
+import supersymmetry.api.capability.impl.InductionFurnaceRecipeLogic;
 import supersymmetry.api.gui.SusyGuiTextures;
 import supersymmetry.api.recipes.SuSyRecipeMaps;
-import supersymmetry.common.blocks.BlockCrucible;
+import supersymmetry.api.recipes.properties.InductionCrucibleMaterialProperty;
 import supersymmetry.common.blocks.BlockInductionCoilAssembly;
+import supersymmetry.common.blocks.BlockInductionCrucible;
 import supersymmetry.common.blocks.SuSyBlocks;
+import supersymmetry.common.materials.SusyMaterials;
+import supersymmetry.common.metatileentities.SuSyMetaTileEntities;
 
 public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockController implements IProgressBarMultiblock {
+
+    private String material;
 
     private static final int WATER_AMOUNT = 100;
     private static final int DANGEROUS_HEAT = 500;
@@ -50,9 +75,12 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
 
     private int heat = 25;
     private int activeTicks;
+    private FluidStack pendingCoolant;
+    private boolean coolingBlocked;
 
     public MetaTileEntityInductionFurnace(ResourceLocation metaTileEntityId) {
         super(metaTileEntityId, SuSyRecipeMaps.INDUCTION_FURNACE);
+        this.recipeMapWorkable = new InductionFurnaceRecipeLogic(this);
     }
 
     @Override
@@ -73,9 +101,10 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
             return;
         }
 
-        if (activeTicks > 0 || heat > 25) {
+        if (activeTicks > 0 || heat > 25 || pendingCoolant != null) {
             updateCooling(activeTicks);
             activeTicks = 0;
+            markDirty();
         }
     }
 
@@ -99,7 +128,7 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
         int[] waterAmount = getWaterAmount();
 
         if (waterToConsume > 0 && heat >= DANGEROUS_HEAT) {
-            explodeMultiblock(2.0F + heat / 1000.0F + 4.0F * waterAmount[0] / 10000.0F);
+            explodeMultiblock(heat / 1000.0F + waterAmount[0] / 10000.0F);
             return;
         }
 
@@ -108,17 +137,53 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
             return;
         }
 
+        if (pendingCoolant != null) {
+            if (((InductionFurnaceRecipeLogic) recipeMapWorkable).canOutputCoolant(pendingCoolant)) {
+                int accepted = outputFluidInventory.fill(pendingCoolant.copy(), true);
+                pendingCoolant.amount -= accepted;
+                if (pendingCoolant.amount <= 0) pendingCoolant = null;
+            }
+            if (pendingCoolant != null) {
+                setCoolingBlocked(true);
+                updateUncooledHeat(isRunning, operationFraction);
+                return;
+            }
+            if (!isRunning && heat == 25) {
+                setCoolingBlocked(false);
+                return;
+            }
+        }
+
         if (waterToConsume > 0) {
             FluidStack actualWater = Materials.Water.getFluid(waterToConsume);
-            FluidStack actualHeatedWater = Materials.Steam.getFluid(waterToConsume);
+            FluidStack actualHeatedWater = SusyMaterials.HotSoftenedWater.getFluid(waterToConsume);
 
-            boolean hasOutputSpace = outputFluidInventory.fill(actualHeatedWater, false) >= waterToConsume;
+            boolean hasOutputSpace = ((InductionFurnaceRecipeLogic) recipeMapWorkable)
+                    .canOutputCoolant(actualHeatedWater);
+
+            setCoolingBlocked(!hasOutputSpace);
 
             if (hasOutputSpace) {
-                inputFluidInventory.drain(actualWater, true);
-                outputFluidInventory.fill(actualHeatedWater, true);
+                FluidStack drained = inputFluidInventory.drain(actualWater, true);
+                if (drained == null || drained.amount == 0) {
+                    updateUncooledHeat(isRunning, operationFraction);
+                    return;
+                }
+                actualHeatedWater.amount = drained.amount;
+                int accepted = outputFluidInventory.fill(actualHeatedWater.copy(), true);
+                if (accepted < drained.amount) {
+                    pendingCoolant = actualHeatedWater.copy();
+                    pendingCoolant.amount -= accepted;
+                    setCoolingBlocked(true);
+                }
+                markDirty();
 
-                double waterFraction = waterToConsume / (double) waterRequired;
+                double waterFraction = accepted / (double) waterRequired;
+
+                if (accepted == 0) {
+                    updateUncooledHeat(isRunning, operationFraction);
+                    return;
+                }
 
                 if (isRunning) {
                     int activeCooling = (int) Math.round(BASE_COOL_DOWN_RATE * 2 * operationFraction * waterFraction);
@@ -137,10 +202,26 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
             }
         }
 
+        if (waterToConsume == 0) setCoolingBlocked(false);
+        updateUncooledHeat(isRunning, operationFraction);
+    }
+
+    private void updateUncooledHeat(boolean isRunning, double operationFraction) {
         if (isRunning) {
             heat = Math.min(1000, heat + (int) Math.ceil(HEAT_UP_RATE * operationFraction));
         } else {
             heat = Math.max(25, heat - BASE_COOL_DOWN_RATE);
+        }
+    }
+
+    public boolean hasPendingCoolant() {
+        return pendingCoolant != null;
+    }
+
+    private void setCoolingBlocked(boolean blocked) {
+        if (coolingBlocked != blocked) {
+            coolingBlocked = blocked;
+            writeCustomData(SuSyDataCodes.UPDATE_FURNACE_COOLING, buf -> buf.writeBoolean(blocked));
         }
     }
 
@@ -153,6 +234,14 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
     protected void addWarningText(List<ITextComponent> textList) {
         super.addWarningText(textList);
         if (isStructureFormed()) {
+            if (((InductionFurnaceRecipeLogic) recipeMapWorkable).isWaitingForOutputs()) {
+                textList.add(TextComponentUtil.translationWithColor(TextFormatting.YELLOW,
+                        "susy.multiblock.induction_furnace.waiting_outputs"));
+            }
+            if (coolingBlocked) {
+                textList.add(TextComponentUtil.translationWithColor(TextFormatting.YELLOW,
+                        "susy.multiblock.induction_furnace.cooling_blocked"));
+            }
             double heatPercentage = heat / (double) MELTING_HEAT;
             int[] waterAmount = getWaterAmount();
 
@@ -172,13 +261,13 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
 
     protected BlockPattern createStructurePattern() {
         return FactoryBlockPattern.start()
-                .aisle(" AAA ", " AAA ", " AAA ")
-                .aisle("AAAAA", "ACCCA", "AAAAA")
-                .aisle("AAAAA", "ACUCA", "AAAAA")
-                .aisle("AAAAA", "ACCCA", "AAAAA")
-                .aisle(" AAA ", " ASA ", " AAA ")
+                .aisle(" XXX ", " XXX ", " XXX ")
+                .aisle("XXXXX", "XCCCX", "XXXXX")
+                .aisle("XXXXX", "XCUCX", "XXXXX")
+                .aisle("XXXXX", "XCCCX", "XXXXX")
+                .aisle(" XXX ", " XSX ", " XXX ")
                 .where('S', selfPredicate())
-                .where('A', states(MetaBlocks.METAL_CASING.getState(MetalCasingType.STEEL_SOLID))
+                .where('X', states(MetaBlocks.METAL_CASING.getState(MetalCasingType.STEEL_SOLID))
                         .or(abilities(MultiblockAbility.INPUT_ENERGY).setExactLimit(1))
                         .or(abilities(MultiblockAbility.MAINTENANCE_HATCH).setExactLimit(1))
                         .or(abilities(MultiblockAbility.IMPORT_FLUIDS).setMinGlobalLimited(1))
@@ -187,11 +276,36 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
                         .or(abilities(MultiblockAbility.EXPORT_ITEMS)))
                 .where('C', states(SuSyBlocks.INDUCTION_COIL_ASSEMBLY
                         .getState(BlockInductionCoilAssembly.InductionCoilAssemblyType.COPPER)))
-                .where('U', states(SuSyBlocks.CRUCIBLE
-                        .getState(BlockCrucible.CrucibleType.SILICON_CARBIDE)))
+                .where('U', inductionCrucibles())
                 .where(' ', any())
                 .where('#', air())
                 .build();
+    }
+
+    @Override
+    protected void addDisplayText(List<ITextComponent> textList) {
+        super.addDisplayText(textList);
+        if (isStructureFormed()) {
+            ITextComponent materialString = TextComponentUtil.stringWithColor(TextFormatting.GRAY, material);
+            textList.add(TextComponentUtil.translationWithColor(TextFormatting.GRAY,
+                    "susy.multiblock.induction_furnace.crucible_material", materialString));
+        }
+    }
+
+    @Override
+    protected void formStructure(PatternMatchContext context) {
+        super.formStructure(context);
+        Object type = context.get("InductionCrucibleType");
+        if (type instanceof BlockInductionCrucible.InductionCrucibleType) {
+            this.material = ((BlockInductionCrucible.InductionCrucibleType) type).material;
+        } else {
+            this.material = BlockInductionCrucible.InductionCrucibleType.SILICON_CARBIDE.material;
+        }
+    }
+
+    @Override
+    public boolean checkRecipe(@NotNull Recipe recipe, boolean consumeIfSuccess) {
+        return this.material.equals(recipe.getProperty(InductionCrucibleMaterialProperty.getInstance(), ""));
     }
 
     @Override
@@ -212,6 +326,11 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
     @NonNull @Override
     protected ICubeRenderer getFrontOverlay() {
         return Textures.PYROLYSE_OVEN_OVERLAY;
+    }
+
+    @Override
+    protected boolean shouldShowVoidingModeButton() {
+        return false;
     }
 
     @Override
@@ -275,13 +394,73 @@ public class MetaTileEntityInductionFurnace extends RecipeMapMultiblockControlle
     @Override
     public NBTTagCompound writeToNBT(NBTTagCompound data) {
         data.setInteger("CoilHeat", heat);
+        if (pendingCoolant != null)
+            data.setTag("FurnacePendingCoolant", pendingCoolant.writeToNBT(new NBTTagCompound()));
         return super.writeToNBT(data);
     }
 
     @Override
     public void readFromNBT(NBTTagCompound data) {
         heat = data.getInteger("CoilHeat");
+        pendingCoolant = FluidStack.loadFluidStackFromNBT(data.getCompoundTag("FurnacePendingCoolant"));
+        if (pendingCoolant != null && pendingCoolant.amount <= 0) pendingCoolant = null;
         super.readFromNBT(data);
+    }
+
+    @Override
+    public void writeInitialSyncData(PacketBuffer buf) {
+        super.writeInitialSyncData(buf);
+        buf.writeBoolean(coolingBlocked);
+    }
+
+    @Override
+    public void receiveInitialSyncData(PacketBuffer buf) {
+        super.receiveInitialSyncData(buf);
+        coolingBlocked = buf.readBoolean();
+    }
+
+    @Override
+    public void receiveCustomData(int dataId, PacketBuffer buf) {
+        if (dataId == SuSyDataCodes.UPDATE_FURNACE_COOLING) coolingBlocked = buf.readBoolean();
+        else super.receiveCustomData(dataId, buf);
+    }
+
+    @Override
+    public List<MultiblockShapeInfo> getMatchingShapes() {
+        ArrayList<MultiblockShapeInfo> shapeInfo = new ArrayList<>();
+        MultiblockShapeInfo.Builder builder = MultiblockShapeInfo.builder()
+                .aisle(" FME ", " DDI ", " XXX ")
+                .aisle("XXXXX", "XCCCX", "XXXXX")
+                .aisle("XXXXX", "XCUCX", "XXXXX")
+                .aisle("XXXXX", "XCCCX", "XXXXX")
+                .aisle(" XXX ", " XSX ", " XXX ")
+                .where('X', MetaBlocks.METAL_CASING.getState(MetalCasingType.STEEL_SOLID))
+                .where('S', SuSyMetaTileEntities.INDUCTION_FURNACE, EnumFacing.SOUTH)
+                .where('C',
+                        SuSyBlocks.INDUCTION_COIL_ASSEMBLY
+                                .getState(BlockInductionCoilAssembly.InductionCoilAssemblyType.COPPER))
+                .where('#', Blocks.AIR.getDefaultState())
+                .where('E', MetaTileEntities.ENERGY_INPUT_HATCH[GTValues.LV], EnumFacing.NORTH)
+                .where('I', MetaTileEntities.ITEM_IMPORT_BUS[GTValues.LV], EnumFacing.NORTH)
+                .where('F', MetaTileEntities.FLUID_IMPORT_HATCH[GTValues.LV], EnumFacing.NORTH)
+                .where('D', MetaTileEntities.FLUID_EXPORT_HATCH[GTValues.LV], EnumFacing.NORTH)
+                .where('M', () -> ConfigHolder.machines.enableMaintenance ? MetaTileEntities.MAINTENANCE_HATCH :
+                        MetaBlocks.METAL_CASING.getState(BlockMetalCasing.MetalCasingType.STEEL_SOLID),
+                        EnumFacing.NORTH);
+        Arrays.stream(BlockInductionCrucible.InductionCrucibleType.values())
+                .sorted(Comparator.comparing(entry -> entry.material))
+                .forEach(entry -> shapeInfo
+                        .add(builder.where('U', SuSyBlocks.INDUCTION_CRUCIBLE.getState(entry)).build()));
+        return shapeInfo;
+    }
+
+    @NotNull @Override
+    public List<ITextComponent> getDataInfo() {
+        List<ITextComponent> list = super.getDataInfo();
+        list.add(new TextComponentTranslation("susy.multiblock.induction_furnace.crucible_material",
+                new TextComponentTranslation(TextFormattingUtil.formatNumbers(material))
+                        .setStyle(new Style().setColor(TextFormatting.BLUE))));
+        return list;
     }
 
     /**

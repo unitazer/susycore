@@ -106,10 +106,11 @@ public class EntitySoyuzBasic extends EntityBlueprintRocket implements IAlwaysRe
             return;
         }
         if (!world.isRemote) {
-            if (this.getEntityData().hasKey("rocket")) {
-                NBTTagCompound rocketNBT = this.getEntityData().getCompoundTag("rocket");
-                AbstractRocketBlueprint blueprint = AbstractRocketBlueprint.getCopyOf(rocketNBT.getString("name"));
-                blueprint.readFromNBT(rocketNBT);
+            NBTTagCompound rocketNBT = this.getEntityData().getCompoundTag("rocket");
+            AbstractRocketBlueprint blueprint = getBlueprint();
+            if (blueprint == null) {
+                this.setLaunchResult(LaunchResult.EXPLODES);
+            } else {
                 BlockPos assemblerPosition = BlockPos.fromLong(this.getEntityData().getLong("assemblerPosition"));
                 if (!assemblerPosition.equals(BlockPos.NULL_VECTOR) &&
                         this.getPosition().distanceSq(assemblerPosition) < 100) {
@@ -124,8 +125,6 @@ public class EntitySoyuzBasic extends EntityBlueprintRocket implements IAlwaysRe
                         this.setLaunchResult(LaunchResult.LAUNCHES);
                     }
                 }
-            } else {
-                this.setLaunchResult(LaunchResult.EXPLODES);
             }
         }
         super.launchRocket();
@@ -210,13 +209,23 @@ public class EntitySoyuzBasic extends EntityBlueprintRocket implements IAlwaysRe
         return 38D;
     }
 
+    public Vec3d getCenter(AxisAlignedBB aabb) {
+        return new Vec3d(aabb.minX + (aabb.maxX - aabb.minX) * 0.5D, aabb.minY + (aabb.maxY - aabb.minY) * 0.5D,
+                aabb.minZ + (aabb.maxZ - aabb.minZ) * 0.5D);
+    }
+
+    @Override
+    public boolean hasNoGravity() {
+        return true;
+    }
+
     @Override
     protected void removePassenger(Entity passenger) {
         super.removePassenger(passenger);
         AxisAlignedBB aabb = new AxisAlignedBB(passenger.getPosition()).grow(5, 1, 5);
         List<AxisAlignedBB> boxes = this.world.getCollisionBoxes(passenger, aabb);
         if (!boxes.isEmpty()) {
-            Vec3d newPos = boxes.get(0).getCenter();
+            Vec3d newPos = getCenter(boxes.get(0));
             passenger.setPosition(newPos.x, newPos.y, newPos.z);
             float f = passenger.width / 2.0F;
             float f1 = passenger.height;

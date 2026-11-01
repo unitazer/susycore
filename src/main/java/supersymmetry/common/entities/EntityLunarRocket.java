@@ -1,7 +1,15 @@
 package supersymmetry.common.entities;
 
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
+
+import supersymmetry.api.items.CargoItemStackHandler;
+import supersymmetry.api.util.SuSyDamageSources;
+import supersymmetry.client.renderer.handler.IAlwaysRender;
+import supersymmetry.common.EventHandlers;
+import supersymmetry.common.blocks.rocketry.BlockSpacecraftInstrument;
 
 /**
  * The rocket built and launched by the lunar launch complex. Lunar escape
@@ -9,7 +17,7 @@ import net.minecraft.world.World;
  * so this shares all of that rocket's behaviour (blueprint, cargo, fuel, flight
  * and success calculation) and only shrinks the hull to fit the ICBM model.
  */
-public class EntityLunarRocket extends EntityBlueprintRocket {
+public class EntityLunarRocket extends EntityBlueprintRocket implements IAlwaysRender {
 
     /** A single engine bell on the centreline, unlike the Soyuz's four boosters. */
     private static final double[][] ENGINE_OFFSETS = { { 0, 0 } };
@@ -70,5 +78,26 @@ public class EntityLunarRocket extends EntityBlueprintRocket {
     @Override
     protected float getExplosionStrength() {
         return 40; // Smaller than the Soyuz, but still needs to cover a passenger sat at 29 blocks
+    }
+
+    @Override
+    protected void act() {
+        if (this.world.isRemote)
+            return;
+        BlockSpacecraftInstrument.Type instrument = BlockSpacecraftInstrument.Type.LANDER;
+        instrument.act(1, this);
+        for (Entity passenger : this.getPassengers()) {
+            if (!EventHandlers.isEntityTravelling(passenger)) {
+                if (passenger instanceof EntityLivingBase living) {
+                    living.attackEntityFrom(SuSyDamageSources.REENTRY, 100000000);
+                }
+            }
+        }
+    }
+
+    @Override
+    public void onAddedToWorld() {
+        super.onAddedToWorld();
+        this.cargo = new CargoItemStackHandler(this.getFuelVolume() / 100, Integer.MAX_VALUE);
     }
 }

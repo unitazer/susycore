@@ -6,6 +6,7 @@ import static gregtech.api.unification.material.Materials.*;
 import static gregtech.api.unification.ore.OrePrefix.spring;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 import net.minecraft.item.ItemStack;
@@ -22,6 +23,7 @@ import gregtech.api.recipes.builders.SimpleRecipeBuilder;
 import gregtech.api.recipes.ingredients.GTRecipeInput;
 import gregtech.api.unification.OreDictUnifier;
 import gregtech.api.unification.material.Material;
+import gregtech.api.unification.material.properties.PropertyKey;
 import gregtech.api.unification.ore.OrePrefix;
 import gregtech.api.unification.stack.MaterialStack;
 import gregtech.core.sound.GTSoundEvents;
@@ -170,7 +172,7 @@ public class SuSyRecipeMaps {
             new SusyRecipeBuilder(), false).setSound(GTSoundEvents.COMBUSTION);
 
     public static final RecipeMap<SimpleRecipeBuilder> VACUUM_DISTILLATION_RECIPES = new RecipeMap<>(
-            "vacuum_distillation", 1, true, 1, true, 2, true, 12, false, new SimpleRecipeBuilder(), false)
+            "vacuum_distillation", 1, true, 2, true, 2, true, 12, false, new SimpleRecipeBuilder(), false)
             .setSound(GTSoundEvents.CHEMICAL_REACTOR);
 
     public static final RecipeMap<SimpleRecipeBuilder> SIEVE_DISTILLATION_RECIPES = new RecipeMap<>(
@@ -192,11 +194,11 @@ public class SuSyRecipeMaps {
     public static final RecipeMap<SimpleRecipeBuilder> ION_IMPLANTATION_RECIPES = new RecipeMap<>("ion_implantation", 3,
             1, 2, 0, new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ELECTROLYZER);
 
-    public static final RecipeMap<SimpleRecipeBuilder> CVD_RECIPES = new RecipeMap<>("cvd", 3, 1, 4, 2,
+    public static final RecipeMap<SimpleRecipeBuilder> CVD_RECIPES = new RecipeMap<>("cvd", 3, 1, 5, 2,
             new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ARC);
 
     public static final RecipeMap<SimpleRecipeBuilder> SPUTTER_DEPOSITION_RECIPES = new RecipeMap<>(
-            "sputter_deposition", 6, 1, 2, 2, new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ELECTROLYZER);
+            "sputter_deposition", 6, 4, 2, 2, new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ELECTROLYZER);
 
     public static final RecipeMap<SimpleRecipeBuilder> EVAPORATION_DEPOSITION_RECIPES = new RecipeMap<>(
             "evaporation_deposition", 4, 1, 0, 0, new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ARC);
@@ -391,7 +393,7 @@ public class SuSyRecipeMaps {
             0, 0, new PrimitiveRecipeBuilder(), false).setSlotOverlay(false, false, GuiTextures.FURNACE_OVERLAY_1)
             .setSlotOverlay(true, false, GuiTextures.FURNACE_OVERLAY_2).setSound(GTSoundEvents.FURNACE);
 
-    public static final RecipeMap<SimpleRecipeBuilder> SCRAP_RECYCLER = new RecipeMap<>("scrap_recycler", 2, 9, 0, 3,
+    public static final RecipeMap<SimpleRecipeBuilder> SCRAP_RECYCLER = new RecipeMap<>("scrap_recycler", 2, 16, 0, 3,
             new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ASSEMBLER);
 
     public static final RecipeMap<SimpleRecipeBuilder> ROCKET_ASSEMBLER = new RecipeMap<>("rocket_assembler", 25, 2, 5,
@@ -440,7 +442,7 @@ public class SuSyRecipeMaps {
             .setProgressBar(GuiTextures.PROGRESS_BAR_MACERATE, ProgressWidget.MoveType.HORIZONTAL)
             .setSound(GTSoundEvents.MACERATOR);
 
-    public static final RecipeMap<SimpleRecipeBuilder> BALL_MILL = new RecipeMap<>("ball_mill", 1, 4, 1, 0,
+    public static final RecipeMap<SimpleRecipeBuilder> BALL_MILL = new RecipeMap<>("ball_mill", 3, 4, 2, 1,
             new SimpleRecipeBuilder().EUt(VA[LV]), false).setSlotOverlay(false, false, GuiTextures.CRUSHED_ORE_OVERLAY)
             .setSlotOverlay(true, false, GuiTextures.DUST_OVERLAY)
             .setProgressBar(GuiTextures.PROGRESS_BAR_MACERATE, ProgressWidget.MoveType.HORIZONTAL)
@@ -469,14 +471,13 @@ public class SuSyRecipeMaps {
             .setProgressBar(GuiTextures.PROGRESS_BAR_HAMMER, ProgressWidget.MoveType.VERTICAL)
             .setSound(GTSoundEvents.ELECTROLYZER).allowEmptyOutput();
 
-    public static final RecipeMap<SimpleRecipeBuilder> INDUCTION_FURNACE = new RecipeMap<>(
-            "induction_furnace", 9, 3, 3, 3, new SimpleRecipeBuilder(), false)
+    public static final RecipeMap<InductionFurnaceRecipeBuilder> INDUCTION_FURNACE = new RecipeMap<>(
+            "induction_furnace", 9, 3, 3, 3, new InductionFurnaceRecipeBuilder(), false)
             .setProgressBar(GuiTextures.PROGRESS_BAR_ARC_FURNACE, ProgressWidget.MoveType.HORIZONTAL)
             .setSound(GTSoundEvents.ARC);
 
     public static final RecipeMap<ResistanceFurnaceRecipeBuilder> RESISTANCE_FURNACE = new RecipeMap<>(
-            "resistance_furnace",
-            6, 2, 1, 1, new ResistanceFurnaceRecipeBuilder(), false)
+            "resistance_furnace", 6, 2, 1, 1, new ResistanceFurnaceRecipeBuilder(), false)
             .setSound(GTSoundEvents.FURNACE);
 
     public static final RecipeMap<NoEnergyRecipeBuilder> SALVAGING_RECIPES = new RecipeMap<>("salvaging", 1, 9, 0, 0,
@@ -503,15 +504,15 @@ public class SuSyRecipeMaps {
             new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ARC);
 
     public static final RecipeMap<SimpleRecipeBuilder> ELECTRON_BEAM_LITHOGRAPHY = new RecipeMap<>(
-            "electron_beam_lithography", 1, 1, 0, 0, new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ARC);
+            "electron_beam_lithography", 2, 1, 0, 0, new SimpleRecipeBuilder(), false).setSound(GTSoundEvents.ARC);
 
-    public static final RecipeMap<SimpleRecipeBuilder> WIRE_BONDING = new RecipeMap<>("wire_bonding", 2, 1, 1, 0,
+    public static final RecipeMap<SimpleRecipeBuilder> WIRE_BONDING = new RecipeMap<>("wire_bonding", 3, 1, 1, 0,
             new SimpleRecipeBuilder(), false);
     public static final RecipeMap<SimpleRecipeBuilder> GREENHOUSE_PLANT = new RecipeMap<>("greenhouse_plant", 2, 4, 3,
             1, new SimpleRecipeBuilder(), false)
             .setProgressBar(GuiTextures.PROGRESS_BAR_ARROW, ProgressWidget.MoveType.HORIZONTAL);
 
-    public static final RecipeMap<SimpleRecipeBuilder> SCREEN_PRINTER = new RecipeMap<>("screen_printer", 2, 1, 1, 0,
+    public static final RecipeMap<SimpleRecipeBuilder> SCREEN_PRINTER = new RecipeMap<>("screen_printer", 3, 1, 1, 0,
             new SimpleRecipeBuilder(), false);
 
     public static final RecipeMap<SimpleRecipeBuilder> ALD_RECIPES = new RecipeMap<>("atomic_layer_deposition", 1, 1, 4,
@@ -662,21 +663,39 @@ public class SuSyRecipeMaps {
 
         SuSyRecipeMaps.INDUCTION_FURNACE.onRecipeBuild(recipeBuilder -> {
 
-            int fluidInput = 0;
-            if (!recipeBuilder.getFluidInputs().isEmpty()) {
-                fluidInput = recipeBuilder.getFluidInputs().getFirst().getInputFluidStack().amount;
+            String mat = recipeBuilder.getMaterial();
+            if (Objects.equals(mat, "")) {
+                recipeBuilder.material("Silicon Carbide");
             }
 
-            if (fluidInput != 0 && recipeBuilder.getDuration() == 0) {
-                int fluidOutput = 0;
+            int duration = recipeBuilder.getDuration();
 
-                if (!recipeBuilder.getFluidOutputs().isEmpty()) {
-                    fluidOutput = recipeBuilder.getFluidOutputs().getFirst().amount;
+            if (duration == 0) {
+                int totalTemperature = 0;
+
+                for (GTRecipeInput recipeInput : recipeBuilder.getInputs()) {
+                    for (ItemStack input : recipeInput.getInputStacks()) {
+                        if (OreDictUnifier.getPrefix(input) != OrePrefix.dust &&
+                                OreDictUnifier.getPrefix(input) != OrePrefix.ingot)
+                            continue;
+
+                        MaterialStack matStack = OreDictUnifier.getMaterial(input);
+                        if (matStack == null || matStack.material == null ||
+                                !matStack.material.hasProperty(PropertyKey.FLUID))
+                            continue;
+
+                        int temperature = matStack.material.getFluid().getTemperature();
+                        int amount = input.getCount();
+
+                        totalTemperature += temperature * amount;
+
+                        break;
+                    }
                 }
 
-                int netFluid = fluidOutput - fluidInput;
+                int dura = totalTemperature / 64;
 
-                recipeBuilder.duration(netFluid / 144 * 40);
+                recipeBuilder.duration(dura);
             }
         });
     }

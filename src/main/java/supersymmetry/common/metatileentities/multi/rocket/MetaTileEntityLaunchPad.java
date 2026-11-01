@@ -4,6 +4,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTBase;
@@ -31,6 +32,7 @@ import codechicken.lib.raytracer.CuboidRayTraceResult;
 import codechicken.lib.render.CCRenderState;
 import codechicken.lib.render.pipeline.IVertexOperation;
 import codechicken.lib.vec.Matrix4;
+import gregtech.api.capability.IDataStickIntractable;
 import gregtech.api.capability.IMaintenanceHatch;
 import gregtech.api.capability.IMultipleTankHandler;
 import gregtech.api.capability.impl.FluidTankList;
@@ -63,21 +65,27 @@ import software.bernie.geckolib3.core.controller.AnimationController;
 import software.bernie.geckolib3.core.event.predicate.AnimationEvent;
 import software.bernie.geckolib3.core.manager.AnimationData;
 import software.bernie.geckolib3.core.manager.AnimationFactory;
+import supersymmetry.api.SusyLog;
 import supersymmetry.api.capability.SuSyDataCodes;
 import supersymmetry.api.metatileentity.IAnimatableMTE;
+import supersymmetry.api.metatileentity.IRocketFueler;
 import supersymmetry.api.metatileentity.multiblock.SuSyPredicates;
 import supersymmetry.api.mixin.RenderDistanceMTE;
 import supersymmetry.api.rocketry.fuels.LiquidRocketFuelEntry;
 import supersymmetry.api.rocketry.rockets.AbstractRocketBlueprint;
+import supersymmetry.api.util.SuSyDamageSources;
 import supersymmetry.client.renderer.textures.SusyTextures;
 import supersymmetry.common.blocks.BlockRocketAssemblerCasing;
 import supersymmetry.common.blocks.SuSyBlocks;
+import supersymmetry.common.entities.EntityAbstractRocket;
 import supersymmetry.common.entities.EntitySoyuzBasic;
 import supersymmetry.common.entities.EntityTransporterErector;
 import supersymmetry.common.item.SuSyMetaItems;
 import supersymmetry.common.rocketry.RocketConfigurerHandler;
 
-public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implements IAnimatableMTE, RenderDistanceMTE {
+public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase
+                                     implements IAnimatableMTE, RenderDistanceMTE, IDataStickIntractable,
+                                     IRocketFueler {
 
     private AxisAlignedBB trainAABB;
     private EntityTransporterErector selectedErector;
@@ -85,6 +93,7 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
     private LaunchPadState state = LaunchPadState.EMPTY;
     protected IItemHandlerModifiable inputInventory;
     protected IMultipleTankHandler inputFluidInventory;
+    public boolean isRetracted = false;
     /**
      * Optional. A rocket programmer along the track normally stamps the mission
      * list onto the erector, but the configurer can also be dropped in here to
@@ -118,22 +127,22 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
 
     @Override
     protected @NotNull BlockPattern createStructurePattern() {
-        String allD = "DDDDDDDDDDDDDDDDDDDDDDD"; // 23 D's
-        String dcTrack = "DDDDDDDDCCCCCCCDDDDDDDD"; // 8D + 7C + 8D = 23: launch surface
-        String dcHoleTrack = "DDDDDDDDCCC CCCDDDDDDDD"; // 8D + 7C + 8D = 23: hole
-        String dcHoleTrackLarge = "DDDDDDDDCC   CCDDDDDDDD"; // 8D + 7C + 8D = 23: hole
-        String ctrlRow = "DDDDDDDDDDDSDDDDDDDDDDD"; // 11D + S + 11D = 23: self-row
-        String sp23 = "                       "; // 23 spaces
-        String ccc23 = "          CCC          "; // 10sp + 3C + 10sp = 23: reinforced foundation under track
-        String supp3 = "     CC   CCC   CC     "; // reinforced foundation under three supports
-        String rrr23 = "          RRR          "; // 10sp + 3R + 10sp = 23
-        String fff23 = "          LLL          "; // 10sp + 3F + 10sp = 23
-        String l23 = "     LL         LL     "; // 6sp + L + 9sp + L + 6sp = 23
-        String cSides = "   CCCC         CCCC   "; // reinforced foundation underneath sides
-        String dad23 = "DDDDDDDD       DDDDDDDD"; // 8C + 7sp + 8C = 23
-        String allC = "CCCCCCCCCCCCCCCCCCCCCCC"; // 23 reinforced foundation
-        String clasp = "     LLLLL   LLLLL     ";
-        String claspOut = "    lLLLLLLLLLLLLLl    ";
+        String allD = " DDDDDDDDDDDDDDDDDDDDDDD "; // 23 D's
+        String dcTrack = " DDDDDDDDCCCCCCCDDDDDDDD "; // 8D + 7C + 8D = 23: launch surface
+        String dcHoleTrack = " DDDDDDDDCC   CCDDDDDDDD "; // 8D + 7C + 8D = 23: hole
+        String dcHoleTrackLarge = " DDDDDDDDC     CDDDDDDDD "; // 8D + 7C + 8D = 23: hole
+        String ctrlRow = " DDDDDDDDDDDSDDDDDDDDDDD "; // 11D + S + 11D = 23: self-row
+        String sp23 = "                         "; // 23 spaces
+        String ccc23 = "           CCC           "; // 10sp + 3C + 10sp = 23: reinforced foundation under track
+        String supp3 = "      CC   CCC   CC      "; // reinforced foundation under three supports
+        String rrr23 = "           RRR           "; // 10sp + 3R + 10sp = 23
+        String fff23 = "           LLL           "; // 10sp + 3F + 10sp = 23
+        String l23 = "      LL         LL      "; // 6sp + L + 9sp + L + 6sp = 23
+        String cSides = "CC  CCCC         CCCC  CC"; // reinforced foundation underneath sides
+        String dad23 = " DDDDDDDD       DDDDDDDD "; // 8C + 7sp + 8C = 23
+        String allC = " CCCCCCCCCCCCCCCCCCCCCCC "; // 23 reinforced foundation
+        String clasp = "      LLLLL   LLLLL      ";
+        String claspOut = "     lLLLLLLLLLLLLLl     ";
 
         FactoryBlockPattern p = FactoryBlockPattern.start();
         // 10 erector approach aisles
@@ -166,17 +175,17 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
         aisleWithSpace(p, sp23, allC, dad23, dad23, dad23, allD, sp23, sp23, sp23, sp23, sp23, sp23, sp23, sp23);
         // Main platform (front half)
         aisleWithSpace(p, sp23, allC, sp23, sp23, sp23, dcTrack, sp23, sp23, sp23, sp23, sp23, sp23, sp23, sp23);
-        aisleWithClasp(p, sp23, claspOut, allC, sp23, sp23, sp23, dcTrack, sp23, sp23, sp23, sp23, sp23, sp23, sp23,
+        aisleWithClasp(p, sp23, claspOut, allC, sp23, sp23, sp23, dcHoleTrack, sp23, sp23, sp23, sp23, sp23, sp23, sp23,
                 sp23);
         // Main platform (center — support pillars)
-        aisleWithClasp(p, l23, clasp, allC, sp23, sp23, sp23, dcHoleTrack, cSides, cSides, cSides, cSides, cSides,
+        aisleWithClasp(p, l23, clasp, allC, sp23, sp23, sp23, dcHoleTrackLarge, cSides, cSides, cSides, cSides, cSides,
                 cSides, l23, l23);
         aisleWithClasp(p, l23, clasp, allC, sp23, sp23, sp23, dcHoleTrackLarge, cSides, cSides, cSides, cSides, cSides,
                 cSides, l23, l23);
-        aisleWithClasp(p, l23, clasp, allC, sp23, sp23, sp23, dcHoleTrack, cSides, cSides, cSides, cSides, cSides,
+        aisleWithClasp(p, l23, clasp, allC, sp23, sp23, sp23, dcHoleTrackLarge, cSides, cSides, cSides, cSides, cSides,
                 cSides, l23, l23);
         // Main platform (back half)
-        aisleWithClasp(p, sp23, claspOut, allC, sp23, sp23, sp23, dcTrack, sp23, sp23, sp23, sp23, sp23, sp23, sp23,
+        aisleWithClasp(p, sp23, claspOut, allC, sp23, sp23, sp23, dcHoleTrack, sp23, sp23, sp23, sp23, sp23, sp23, sp23,
                 sp23);
         aisleWithSpace(p, sp23, allC, sp23, sp23, sp23, dcTrack, sp23, sp23, sp23, sp23, sp23, sp23, sp23, sp23);
         // Transition
@@ -340,8 +349,7 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
                 updateSelectedErector();
                 findRocket();
                 if (checkRocket()) {
-                    if (selectedRocket.isCountdownStarted() &&
-                            selectedRocket.getLaunchTime() <= this.getWorld().getTotalWorldTime()) {
+                    if (selectedRocket.isCountdownStarted()) {
                         this.setLaunchPadState(LaunchPadState.LAUNCHING);
                     } else {
                         this.setLaunchPadState(LaunchPadState.LOADED);
@@ -349,10 +357,10 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
                     break;
                 }
                 if (checkErector() && selectedErector.isRocketLoaded()) {
-                    this.setLaunchPadState(LaunchPadState.LOADING);
                     this.selectedErector.setLiftingMode(EntityTransporterErector.LiftingMode.UP);
                 }
                 this.setLaunchPadState(LaunchPadState.EMPTY);
+                return;
             case EMPTY:
                 if (this.getOffsetTimer() % 5 == 0) {
                     updateSelectedErector();
@@ -390,9 +398,11 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
                     this.selectedErector.setLiftingMode(EntityTransporterErector.LiftingMode.DOWN);
                 }
                 if (this.getOffsetTimer() % 4 == 0) {
-                    setConfigWithinBudget(this.configurerSlot.program(this.selectedRocket));
+                    setConfigWithinBudget(this.configurerSlot.program(getWorld().provider.getDimension(),
+                            this.selectedRocket.getEntityData()));
                 }
-                if (!loadCargo() || this.getInputRedstoneSignal(this.getFrontFacing(), false) == 0) {
+                if (!loadCargo() || this.getInputRedstoneSignal(this.getFrontFacing(), false) == 0 ||
+                        !this.selectedRocket.canStartCountdown()) {
                     break;
                 }
                 this.setLaunchPadState(LaunchPadState.LAUNCHING);
@@ -403,6 +413,10 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
                         this.setLaunchPadState(LaunchPadState.EMPTY);
                         break;
                     }
+                }
+                if (selectedRocket.isLaunched() && selectedRocket.posY - getLaunchPosition().y < 40 &&
+                        selectedRocket.ticksExisted % 5 == 0) {
+                    damageEntitiesNearExhaust();
                 }
                 this.supportAngle = Math.max(Math.PI / 4, this.supportAngle - (0.087 / 20));
                 if (this.supportAngle <= Math.PI / 4 && !this.selectedRocket.isCountdownStarted()) {
@@ -415,12 +429,38 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
         }
     }
 
+    private void damageEntitiesNearExhaust() {
+        Vec3d launch = getLaunchPosition();
+        AxisAlignedBB searchBox = new AxisAlignedBB(launch.x - 50, launch.y - 50, launch.z - 50, launch.x + 50,
+                launch.y + 50, launch.z + 50);
+
+        for (EntityLivingBase entity : this.getWorld().getEntitiesWithinAABB(EntityLivingBase.class, searchBox)) {
+            if (entity instanceof EntityAbstractRocket || entity.getRidingEntity() instanceof EntityAbstractRocket) {
+                continue;
+            }
+            double distance = launch.distanceTo(entity.getPositionVector());
+            if (distance <= 0) {
+                continue;
+            }
+            float damage = (float) (100000 / Math.pow(distance, 3));
+            if (damage >= 0.8) {
+                entity.attackEntityFrom(SuSyDamageSources.ROCKET_EXHAUST, damage);
+            }
+        }
+
+        AxisAlignedBB trainDamageBox = new AxisAlignedBB(launch.x - 18, launch.y - 18, launch.z - 18, launch.x + 18,
+                launch.y + 18, launch.z + 18);
+        for (ModdedEntity train : getWorld().getEntitiesWithinAABB(ModdedEntity.class, trainDamageBox)) {
+            train.attackEntityFrom(DamageSource.causeExplosionDamage(selectedRocket), 20f);
+        }
+    }
+
     // In liters per second
     private static final int MAX_FUELING_SPEED = 8000;
 
     private boolean loadCargo() {
-        GTTransferUtils.moveInventoryItems(this.getImportItems(), selectedRocket.getInventory());
-        if (this.fuelingProgress >= selectedRocket.getFuelVolume()) {
+        GTTransferUtils.moveInventoryItems(this.inputInventory, selectedRocket.getInventory());
+        if (isFuelingComplete()) {
             return true;
         }
         // the Soyuz is liquid-fuelled, and nothing here ever puts a solid fuel on it
@@ -440,18 +480,17 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
             selectedRocket.setFuel(fuelEntry);
         }
         var composition = fuelEntry.getComposition();
-        // Round up for the composition
         int totalMBPerUnit = composition.stream().mapToInt(Tuple::getSecond).sum();
-        int maxFuelingProgress = selectedRocket.getFuelVolume() + totalMBPerUnit - 1;
-        int unitsDrained = Math.min(maxFuelingProgress - this.fuelingProgress, MAX_FUELING_SPEED / totalMBPerUnit);
+        if (totalMBPerUnit <= 0)
+            return false;
+        int remaining = selectedRocket.getFuelVolume() + totalMBPerUnit - 1 - this.fuelingProgress;
+        int unitsDrained = Math.min(remaining / totalMBPerUnit, MAX_FUELING_SPEED / totalMBPerUnit);
         for (var comp : composition) {
-            FluidStack tryToDrain = new FluidStack(comp.getFirst(), MAX_FUELING_SPEED);
-            FluidStack drained = inputFluidInventory.drain(tryToDrain, false);
+            FluidStack drained = inputFluidInventory.drain(new FluidStack(comp.getFirst(), MAX_FUELING_SPEED),
+                    false);
+            if (drained == null)
+                return false;
             // Intentional integer division moment
-            if (drained == null) {
-                unitsDrained = 0;
-                break;
-            }
             unitsDrained = Math.min(drained.amount / comp.getSecond(), unitsDrained);
         }
         setFuelingProgress(this.fuelingProgress + (unitsDrained * totalMBPerUnit));
@@ -459,7 +498,16 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
             inputFluidInventory.drain(new FluidStack(comp.getFirst(), (comp.getSecond() * unitsDrained)), true);
         }
 
+        return isFuelingComplete();
+    }
+
+    public boolean isFuelingComplete() {
         return this.fuelingProgress >= selectedRocket.getFuelVolume();
+    }
+
+    @Override
+    public void launch() {
+        this.setLaunchPadState(LaunchPadState.LAUNCHING);
     }
 
     private void setFuelingProgress(int fuelingProgress) {
@@ -472,11 +520,6 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
             this.configWithinBudget = withinBudget;
             writeCustomData(SuSyDataCodes.UPDATE_CAN_HANDLE_FULL_CONFIG, (buf) -> buf.writeBoolean(withinBudget));
         }
-    }
-
-    @Override
-    protected void initializeInventory() {
-        super.initializeInventory();
     }
 
     @Override
@@ -512,13 +555,15 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
         List<EntitySoyuzBasic> rockets = getWorld().getEntitiesWithinAABB(EntitySoyuzBasic.class, getRocketAABB());
         if (!rockets.isEmpty()) {
             this.selectedRocket = rockets.get(0);
+            selectedRocket.fueler = this;
         }
     }
 
     public void spawnRocket(NBTTagCompound tag) {
         Vec3d position = this.getLaunchPosition();
         this.selectedRocket = new EntitySoyuzBasic(this.getWorld(), position,
-                this.getFrontFacing().getHorizontalAngle());
+                this.getFrontFacing().getHorizontalAngle() + 45);
+        selectedRocket.fueler = this;
         if (tag != null) {
             // Copy in all tags
             for (Map.Entry<String, NBTBase> info : tag.tagMap.entrySet()) {
@@ -531,9 +576,19 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
     @Override
     public void readFromNBT(NBTTagCompound data) {
         super.readFromNBT(data);
-        this.state = LaunchPadState.valueOf(data.getString("state"));
+        this.state = readLaunchPadState(data);
         this.fuelingProgress = data.getInteger("fuelingProgress");
         this.configurerSlot.deserializeNBT(data.getCompoundTag("configurer"));
+    }
+
+    private static LaunchPadState readLaunchPadState(NBTTagCompound data) {
+        try {
+            return LaunchPadState.valueOf(data.getString("state"));
+        } catch (IllegalArgumentException e) {
+            SusyLog.logger.warn("unknown launch pad state {}. full nbt:\n{}", data.getString("state"),
+                    data);
+            return LaunchPadState.EMPTY;
+        }
     }
 
     @Override
@@ -627,11 +682,22 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
 
     @SideOnly(Side.CLIENT)
     private <T extends MetaTileEntity & IAnimatableMTE> PlayState predicate(AnimationEvent<T> event) {
-        if (this.state == LaunchPadState.LOADING || this.state == LaunchPadState.LAUNCHING &&
-                event.getController().getAnimationState().equals(AnimationState.Stopped)) {
-            event.getController().setAnimation(new AnimationBuilder().playAndHold("cycle"));
+        if (this.state == LaunchPadState.LAUNCHING &&
+                event.getController().getAnimationState().equals(AnimationState.Stopped) && !isRetracted) {
+            event.getController().setAnimation(new AnimationBuilder().playAndHold("retract"));
+            isRetracted = true;
             return PlayState.CONTINUE;
-        }
+        } else if (this.state == LaunchPadState.LOADING &&
+                event.getController().getAnimationState().equals(AnimationState.Stopped) && !isRetracted) {
+                    event.getController().setAnimation(new AnimationBuilder().playAndHold("retract_load"));
+                    isRetracted = true;
+                    return PlayState.CONTINUE;
+                } else
+            if (isRetracted && (this.state == LaunchPadState.LOADED || this.state == LaunchPadState.EMPTY)) {
+                event.getController().setAnimation(new AnimationBuilder().playAndHold("protract"));
+                isRetracted = false;
+                return PlayState.CONTINUE;
+            }
         return isStructureFormed() ? PlayState.CONTINUE : PlayState.STOP;
     }
 
@@ -731,12 +797,11 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
     @Override
     public boolean onRightClick(EntityPlayer playerIn, EnumHand hand, EnumFacing facing,
                                 CuboidRayTraceResult hitResult) {
-        if (this.state == LaunchPadState.EMPTY && playerIn.isCreative() &&
+        if (!playerIn.world.isRemote && this.state == LaunchPadState.EMPTY && playerIn.isCreative() &&
                 playerIn.getHeldItem(hand).isItemEqual(SuSyMetaItems.DATA_CARD_MASTER_BLUEPRINT.getStackForm())) {
             NBTTagCompound tag = playerIn.getHeldItem(hand).getTagCompound();
-            if (tag != null) {
-                AbstractRocketBlueprint bp = AbstractRocketBlueprint.getCopyOf(tag.getString("name"));
-                bp.readFromNBT(tag);
+            AbstractRocketBlueprint bp = tag != null ? AbstractRocketBlueprint.fromTag(tag) : null;
+            if (bp != null) {
                 NBTTagCompound rocketTag = new NBTTagCompound();
                 rocketTag.setLong("assemblerPosition", BlockPos.ORIGIN.toLong());
                 rocketTag.setTag("rocket", bp.writeToNBT());
@@ -782,5 +847,20 @@ public class MetaTileEntityLaunchPad extends MultiblockWithDisplayBase implement
             return; // don't redo the check
         }
         super.checkStructurePattern();
+    }
+
+    @Override
+    public void onDataStickLeftClick(EntityPlayer player, ItemStack dataStick) {}
+
+    @Override
+    public boolean onDataStickRightClick(EntityPlayer player, ItemStack dataStick) {
+        if (selectedRocket == null || !player.isSneaking()) {
+            return false;
+        }
+        UUID rocketUuid = selectedRocket.getUniqueID();
+        NBTTagCompound tag = new NBTTagCompound();
+        tag.setUniqueId("RocketUUID", rocketUuid);
+        dataStick.setTagCompound(tag);
+        return false;
     }
 }

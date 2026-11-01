@@ -1,9 +1,9 @@
 package supersymmetry.common.materials;
 
 import java.lang.reflect.Field;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import gregtech.api.GregTechAPI;
 import gregtech.api.fluids.FluidBuilder;
@@ -13,15 +13,19 @@ import gregtech.api.unification.material.Materials;
 import gregtech.api.unification.material.info.MaterialFlag;
 import gregtech.api.unification.material.info.MaterialFlags;
 import gregtech.api.unification.material.properties.*;
-import supercritical.api.unification.material.SCMaterials;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.unification.material.info.SuSyMaterialFlags;
+import supersymmetry.api.unification.material.properties.SolidRocketFuelProperty;
+import supersymmetry.api.unification.material.properties.SuSyPropertyKey;
+import supersymmetry.api.unification.material.properties.TanklessFluidPipeProperties;
 
 public class SusyMaterials {
 
     public static Material ManganeseIronArsenicPhosphide;
     public static Material PraseodymiumNickel;
     public static Material GadoliniumSiliconGermanium;
+    public static Material MolybdenumDisilicide;
     public static Material Gabbro;
     public static Material Gneiss;
     public static Material Limestone;
@@ -45,8 +49,10 @@ public class SusyMaterials {
     public static Material AluminiumAlloy6061;
     public static Material AluminiumAlloy7075;
     public static Material AluminiumAlloyMg6;
+    public static Material Monel400;
 
     public static Material RefractoryGunningMixture;
+    public static Material HotSoftenedWater;
 
     // Minerals
     public static Material Anorthite;
@@ -83,13 +89,6 @@ public class SusyMaterials {
         SuSyHighDegreeMaterials.init();
         SuSyUnknownCompositionMaterials.init();
         changeProperties();
-    }
-
-    public static void removeFlags() {
-        for (Material material : GregTechAPI.materialManager.getRegisteredMaterials()) {
-            if (material.hasFlag(MaterialFlags.DECOMPOSITION_BY_ELECTROLYZING))
-                removeFlag(MaterialFlags.DECOMPOSITION_BY_ELECTROLYZING, material);
-        }
     }
 
     private static void changeProperties() {
@@ -205,6 +204,10 @@ public class SusyMaterials {
         Materials.Electrum.setProperty(PropertyKey.ORE, new OreProperty());
 
         Materials.Hydrogen.addFlags(MaterialFlags.FLAMMABLE);
+
+        if (GregTechAPI.materialManager.getMaterial("rp_one") == null) {
+            Materials.Agar.setProperty(SuSyPropertyKey.SOLID_ROCKET_FUEL, new SolidRocketFuelProperty(1, 1, 200, 0));
+        }
     }
 
     private static void removeProperty(PropertyKey<?> key, Material material) {
@@ -219,6 +222,24 @@ public class SusyMaterials {
         }
         if (map != null) {
             map.remove(key);
+        }
+    }
+
+    private static void removeAllProperties(Material material) {
+        Map<PropertyKey<?>, IMaterialProperty> map = null;
+        try {
+            Field field = MaterialProperties.class.getDeclaredField("propertyMap");
+            field.setAccessible(true);
+            // noinspection unchecked
+            map = (Map<PropertyKey<?>, IMaterialProperty>) field.get(material.getProperties());
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            SusyLog.logger.error("Failed to reflect material property map", e);
+        }
+        if (map != null) {
+            map.remove(PropertyKey.FLUID_PIPE);
+            map.remove(PropertyKey.ITEM_PIPE);
+            map.remove(PropertyKey.WIRE);
+            map.remove(PropertyKey.BLAST);
         }
     }
 
@@ -240,31 +261,39 @@ public class SusyMaterials {
         }
     }
 
-    private static final Map<Material, Integer> MOLTEN_TEMPERATURES = new HashMap<>();
+    private static void removeAllFlags(Material material) {
+        HashSet<MaterialFlag> set = null;
+        try {
+            Field field = MaterialFlags.class.getDeclaredField("flags");
+            field.setAccessible(true);
+
+            Field field2 = Material.class.getDeclaredField("flags");
+            field2.setAccessible(true);
+            // noinspection unchecked
+            set = (HashSet<MaterialFlag>) field.get(field2.get(material));
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            SusyLog.logger.error("Failed to reflect material flag hashset", e);
+        }
+        if (set != null) {
+            set.clear();
+        }
+    }
+
+    private static final Object2IntOpenHashMap<Material> MOLTEN_TEMPERATURES = new Object2IntOpenHashMap<>();
 
     static {
         MOLTEN_TEMPERATURES.put(Materials.Aluminium, 933);
-        MOLTEN_TEMPERATURES.put(Materials.Bismuth, 545);
         MOLTEN_TEMPERATURES.put(Materials.Cobalt, 1768);
         MOLTEN_TEMPERATURES.put(Materials.Copper, 1357);
         MOLTEN_TEMPERATURES.put(Materials.Gold, 1337);
-        MOLTEN_TEMPERATURES.put(Materials.Indium, 430);
         MOLTEN_TEMPERATURES.put(Materials.Iron, 1420);
         MOLTEN_TEMPERATURES.put(Materials.Lead, 601);
-        MOLTEN_TEMPERATURES.put(Materials.Manganese, 1519);
         MOLTEN_TEMPERATURES.put(Materials.Nickel, 1728);
-        MOLTEN_TEMPERATURES.put(Materials.Palladium, 1828);
-        MOLTEN_TEMPERATURES.put(Materials.Platinum, 2041);
-        MOLTEN_TEMPERATURES.put(Materials.Rhodium, 2237);
         MOLTEN_TEMPERATURES.put(Materials.Silver, 1235);
         MOLTEN_TEMPERATURES.put(Materials.Tin, 505);
         MOLTEN_TEMPERATURES.put(Materials.Zinc, 693);
 
-        MOLTEN_TEMPERATURES.put(Materials.WroughtIron, 1811);
-        MOLTEN_TEMPERATURES.put(Materials.AnnealedCopper, 1357);
-        MOLTEN_TEMPERATURES.put(SusyMaterials.AluminiumAlloy6061, 925);
-        MOLTEN_TEMPERATURES.put(SusyMaterials.AluminiumAlloy7075, 900);
-
+        MOLTEN_TEMPERATURES.put(Materials.RedAlloy, 1357);
         MOLTEN_TEMPERATURES.put(Materials.Brass, 1223);
         MOLTEN_TEMPERATURES.put(Materials.Bronze, 1263);
         MOLTEN_TEMPERATURES.put(Materials.Cupronickel, 1423);
@@ -275,20 +304,34 @@ public class SusyMaterials {
         MOLTEN_TEMPERATURES.put(Materials.Nichrome, 1673);
         MOLTEN_TEMPERATURES.put(Materials.Steel, 1790);
         MOLTEN_TEMPERATURES.put(Materials.StainlessSteel, 1723);
-        MOLTEN_TEMPERATURES.put(Materials.Ultimet, 1650);
-        MOLTEN_TEMPERATURES.put(SCMaterials.Inconel, 1600);
-
-        MOLTEN_TEMPERATURES.put(Materials.VanadiumSteel, 1800);
-        MOLTEN_TEMPERATURES.put(Materials.TungstenSteel, 2000);
-        MOLTEN_TEMPERATURES.put(Materials.HSSG, 1700);
-        MOLTEN_TEMPERATURES.put(Materials.HSSE, 1715);
-        MOLTEN_TEMPERATURES.put(Materials.HSSS, 1730);
-
-        MOLTEN_TEMPERATURES.put(Materials.RedAlloy, 1357);
     }
 
-    public static void addFlags() {
+    private static final Set<Material> MATERIAL_REMOVAL = Set.of(
+    // Materials.TinAlloy,
+    // Materials.CobaltBrass,
+    // Materials.Potin,
+    // Materials.BlackBronze,
+    // Materials.SterlingSilver,
+    // Materials.RedSteel,
+    // Materials.BlueSteel,
+    // Materials.RoseGold,
+    // Materials.BismuthBronze,
+    // Materials.DamascusSteel
+    );
+
+    public static void changeFlags() {
         for (Material material : GregTechAPI.materialManager.getRegisteredMaterials()) {
+
+            if (MATERIAL_REMOVAL.contains(material)) {
+                for (Material mat : MATERIAL_REMOVAL) {
+                    removeAllProperties(mat);
+                }
+                removeAllFlags(material);
+                material.addFlags(MaterialFlags.GENERATE_PLATE);
+                material.addFlags(MaterialFlags.NO_UNIFICATION);
+            }
+
+            Materials.BlueSteel.addFlags(MaterialFlags.GENERATE_FRAME);
 
             IngotProperty ingotProperty = material.getProperty(PropertyKey.INGOT);
             if (ingotProperty != null) {
@@ -304,11 +347,20 @@ public class SusyMaterials {
                         builder.temperature(temp);
                         material.addFlags(SuSyMaterialFlags.INDUCTION_MELT);
 
+                        if (temp >= 1500) {
+                            material.addFlags(SuSyMaterialFlags.ALUMINA_CRUCIBLE);
+                        }
                         if (temp <= 1673) {
                             material.addFlags(SuSyMaterialFlags.RESISTANCE_MELT);
                         }
                     }
                 }
+            }
+
+            if (material.hasProperty(PropertyKey.FLUID_PIPE) &&
+                    !material.hasProperty(SuSyPropertyKey.TANKLESS_FLUID_PIPE)) {
+                material.getProperties().setProperty(SuSyPropertyKey.TANKLESS_FLUID_PIPE,
+                        TanklessFluidPipeProperties.from(material.getProperty(PropertyKey.FLUID_PIPE)));
             }
         }
     }

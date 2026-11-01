@@ -20,4 +20,7 @@ public class SuSyDataCodes {
     public static final int UPDATE_INSERT_EXTRACT = assignId();
     public static final int UPDATE_HIGHLIGHT_POS = assignId();
     public static final int REMOVE_HIGHLIGHT_POS = assignId();
+    public static final int UPDATE_FLANGE_VISIBILITY = assignId();
+    public static final int UPDATE_FURNACE_DELIVERY = assignId();
+    public static final int UPDATE_FURNACE_COOLING = assignId();
 }

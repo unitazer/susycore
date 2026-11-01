@@ -1,8 +1,8 @@
 package supersymmetry.client.audio;
 
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.MovingSound;
 import net.minecraft.util.SoundCategory;
-import net.minecraft.util.math.MathHelper;
 
 import supersymmetry.api.sound.SusySounds;
 import supersymmetry.common.entities.EntitySoyuzBasic;
@@ -10,7 +10,6 @@ import supersymmetry.common.entities.EntitySoyuzBasic;
 public class MovingSoundRocket extends MovingSound {
 
     private final EntitySoyuzBasic rocket;
-    private float distance = 0.0F;
 
     public MovingSoundRocket(EntitySoyuzBasic rocket) {
         super(SusySounds.ROCKET_LAUNCH, SoundCategory.NEUTRAL);
@@ -32,13 +31,18 @@ public class MovingSoundRocket extends MovingSound {
     @Override
     public void update() {
         if (this.rocket.isDead) {
-            this.donePlaying = true;
+            this.volume *= 0.99F;
+            if (this.volume < 0.1) {
+                this.donePlaying = true;
+            }
         } else {
             this.xPosF = (float) this.rocket.posX;
             this.yPosF = (float) this.rocket.posY;
             this.zPosF = (float) this.rocket.posZ;
 
-            this.distance = MathHelper.clamp(this.distance + 0.0025F, 0.0F, 1.0F);
+            double d = Minecraft.getMinecraft().player.getDistance(rocket);
+            float falloff = (float) (1 / (1 + 0.02 * Math.max(0, d - 1))); // inverse-distance
+            this.volume = 1 * falloff;
         }
     }
 }

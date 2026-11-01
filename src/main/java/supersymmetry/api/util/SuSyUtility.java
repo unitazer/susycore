@@ -18,12 +18,17 @@ import net.minecraftforge.fml.relauncher.SideOnly;
 
 import gregtech.api.GTValues;
 import gregtech.api.block.machines.MachineItemBlock;
+import gregtech.api.items.armor.ArmorMetaItem;
 import gregtech.api.items.metaitem.MetaItem;
+import gregtech.api.items.toolitem.IGTTool;
+import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.unification.material.Material;
 import gregtech.api.util.GTUtility;
 import gregtech.common.metatileentities.storage.MetaTileEntityCrate;
+import gregtech.common.metatileentities.storage.MetaTileEntityDrum;
 import supersymmetry.Supersymmetry;
 import supersymmetry.SusyConfig;
+import supersymmetry.common.item.SuSyMetaItems;
 
 public class SuSyUtility {
 
@@ -146,6 +151,9 @@ public class SuSyUtility {
     }
 
     public static boolean isAllowedItemForSpace(ItemStack item) {
+        if (item.isEmpty()) {
+            return true;
+        }
         if (bannedSpaceItems == null) {
             loadBannedSpaceItems();
         }
@@ -155,12 +163,24 @@ public class SuSyUtility {
         if (item.getItem() instanceof MetaItem) {
             return true;
         }
+        if (item.getItem() instanceof IGTTool) {
+            return true;
+        }
+        if (item.getItem() == SuSyMetaItems.DATA_CARD_MASTER_BLUEPRINT.getStackForm().getItem()) {
+            return true;
+        }
+        if (item.getItem() instanceof ArmorMetaItem<?>) {
+            return true;
+        }
         if (item.getItem() instanceof MachineItemBlock mteBlock) {
-            if (GTUtility.getMetaTileEntity(item) instanceof MetaTileEntityCrate) {
+            MetaTileEntity mte = GTUtility.getMetaTileEntity(item);
+            if (mte instanceof MetaTileEntityCrate) {
                 NBTTagCompound tag = item.getTagCompound();
                 if (tag.hasKey("Inventory")) {
                     return false;
                 }
+            } else if (mte instanceof MetaTileEntityDrum) {
+                return true;
             }
         }
         return item.getTagCompound() == null || item.getTagCompound().isEmpty();

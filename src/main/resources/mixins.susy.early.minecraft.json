@@ -19,7 +19,8 @@
     "NBTTagLongArrayAccessor",
     "NetHandlerPlayServerMixin",
     "PlayerChunkMapMixin",
-    "WorldMixin"
+    "WorldMixin",
+    "WorldServerPlanetGrowthMixin"
   ],
   "client": [
     "BlockModelRendererMixin",
@@ -32,6 +33,7 @@
     "RenderGlobalMixin",
     "TileEntityMixin",
     "TileEntityRendererDispatcherMixin",
-    "WorldProviderSurfaceMixin"
+    "WorldProviderSurfaceMixin",
+    "WorldMixin"
   ]
 }

@@ -22,6 +22,7 @@ import net.minecraft.world.WorldServer;
 import net.minecraft.world.WorldServerMulti;
 import net.minecraft.world.storage.WorldInfo;
 import net.minecraftforge.event.entity.living.LivingFallEvent;
+import net.minecraftforge.event.entity.player.EntityItemPickupEvent;
 import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -38,14 +39,19 @@ import gregtech.api.util.GTTeleporter;
 import gregtech.api.util.TeleportHandler;
 import gregtech.common.items.MetaItems;
 import gregtechfoodoption.item.GTFOMetaItem;
+import supersymmetry.SuSyValues;
 import supersymmetry.Supersymmetry;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.items.CargoItemStackHandler;
 import supersymmetry.api.phys.ChunkSyncManager;
 import supersymmetry.api.phys.ContactForceHandler;
 import supersymmetry.api.phys.Rapier;
+import supersymmetry.api.rocketry.ICargoInventory;
+import supersymmetry.api.space.Planetoid;
 import supersymmetry.api.space.dimension.WorldProviderSpace;
+import supersymmetry.common.entities.EntityAbstractRocket;
 import supersymmetry.common.entities.EntityDropPod;
+import supersymmetry.common.entities.EntityEarthLandingSystem;
 import supersymmetry.common.entities.EntityLander;
 import supersymmetry.common.event.DimensionBreathabilityHandler;
 import supersymmetry.common.event.DimensionRidingSwapData;
@@ -54,6 +60,7 @@ import supersymmetry.common.item.SuSyArmorItem;
 import supersymmetry.common.network.SPacketFirstJoin;
 import supersymmetry.common.rocketry.LanderSpawnEntry;
 import supersymmetry.common.rocketry.LanderSpawnQueue;
+import supersymmetry.common.world.PlanetoidHandler;
 import supersymmetry.common.world.WorldProviderPlanet;
 import supersymmetry.common.world.atmosphere.AtmosphereWorldData;
 
@@ -112,6 +119,10 @@ public class EventHandlers {
         if (!gameRules.hasRule("factionViolence")) {
             gameRules.addGameRule("factionViolence", "true", GameRules.ValueType.BOOLEAN_VALUE);
         }
+
+        if (!gameRules.hasRule("factionTagger")) {
+            gameRules.addGameRule("factionTagger", "false", GameRules.ValueType.BOOLEAN_VALUE);
+        }
     }
 
     @SubscribeEvent
@@ -161,7 +172,10 @@ public class EventHandlers {
         }
         // Tick atmosphere system for planet dimensions
         if (world.provider instanceof WorldProviderPlanet) {
-            AtmosphereWorldData.get(world).getGraph().tick(world);
+            AtmosphereWorldData data = AtmosphereWorldData.get(world);
+            if (data.getGraph().tick(world)) {
+                data.markDirty();
+            }
         }
         if (world.provider instanceof WorldProviderSpace) {
             WorldInfo info = world.getWorldInfo();
@@ -207,47 +221,50 @@ public class EventHandlers {
     private static @NotNull void handleEntityTransfer() {
         List<DimensionRidingSwapData> toRemove = new ArrayList<>();
         for (DimensionRidingSwapData data : travellingPassengers) {
-
             Entity mount = data.mount;
-            Entity passenger = data.passenger;
-            if (passenger.getServer() == null) {
+            List<Entity> passengers = data.passengers;
+            if (passengers.isEmpty() || passengers.get(0).getServer() == null) {
                 continue;
             }
             long now = mount.world.getTotalWorldTime();
-
-            if (!data.transferred) {
-                // Phase 1: move the player into the mount's dimension once the mount has
-                // settled there (>2 ticks). Deliberately do NOT mount on this tick.
-                if (mount.dimension != passenger.dimension && now - data.time > 2) {
+            List<Entity> passengersToRemove = new ArrayList<>();
+            for (Entity passenger : passengers) {
+                if (!data.transferred) {
+                    // Phase 1: move the player into the mount's dimension once the mount has
+                    // settled there (>2 ticks). Deliberately do NOT mount on this tick.
+                    if (mount.dimension != passenger.dimension && now - data.time > 2) {
+                        WorldServer newWorld = passenger.getServer().getWorld(mount.dimension);
+                        passenger.dismountRidingEntity();
+                        passenger.setLocationAndAngles(mount.getPosition().getX(), mount.getPosition().getY(),
+                                mount.getPosition().getZ(), mount.rotationYaw, mount.rotationPitch);
+                        passenger.getServer().getPlayerList().transferPlayerToDimension((EntityPlayerMP) passenger,
+                                mount.dimension, new GTTeleporter(newWorld, mount.getPosition().getX(),
+                                        mount.getPosition().getY(), mount.getPosition().getZ()));
+                        Entity realMount = newWorld.getEntityFromUuid(mount.getPersistentID());
+                        if (realMount != null) {
+                            realMount.forceSpawn = true;
+                        }
+                        data.transferred = true;
+                        data.transferTime = now;
+                    }
+                } else if (now - data.transferTime > MOUNT_DELAY) {
+                    // Phase 2: the client has rebuilt its world around the now-stable player
+                    // entity (which retains the original entity id). Mount, and re-send the
+                    // passenger packet explicitly in case the client missed the tracker's
+                    // update mid-reload. If the mount isn't registered in the destination
+                    // world yet, keep retrying until the hard timeout below.
                     WorldServer newWorld = passenger.getServer().getWorld(mount.dimension);
-                    passenger.dismountRidingEntity();
-                    passenger.setLocationAndAngles(mount.getPosition().getX(), mount.getPosition().getY(),
-                            mount.getPosition().getZ(), mount.rotationYaw, mount.rotationPitch);
-                    passenger.getServer().getPlayerList().transferPlayerToDimension((EntityPlayerMP) passenger,
-                            mount.dimension, new GTTeleporter(newWorld, mount.getPosition().getX(),
-                                    mount.getPosition().getY(), mount.getPosition().getZ()));
                     Entity realMount = newWorld.getEntityFromUuid(mount.getPersistentID());
                     if (realMount != null) {
-                        realMount.forceSpawn = true;
+                        passenger.startRiding(realMount);
+                        passengersToRemove.add(passenger);
                     }
-                    data.transferred = true;
-                    data.transferTime = now;
-                }
-            } else if (now - data.transferTime > MOUNT_DELAY) {
-                // Phase 2: the client has rebuilt its world around the now-stable player
-                // entity (which retains the original entity id). Mount, and re-send the
-                // passenger packet explicitly in case the client missed the tracker's
-                // update mid-reload. If the mount isn't registered in the destination
-                // world yet, keep retrying until the hard timeout below.
-                WorldServer newWorld = passenger.getServer().getWorld(mount.dimension);
-                Entity realMount = newWorld.getEntityFromUuid(mount.getPersistentID());
-                if (realMount != null) {
-                    passenger.startRiding(realMount);
-                    toRemove.add(data);
                 }
             }
-
-            if (now - data.time > 200) {
+            for (Entity passenger : passengersToRemove) {
+                data.passengers.remove(passenger);
+            }
+            if (passengers.isEmpty() || now - data.time > 200) {
                 toRemove.add(data);
             }
         }
@@ -257,7 +274,7 @@ public class EventHandlers {
     }
 
     public static boolean isEntityTravelling(Entity entity) {
-        return travellingPassengers.stream().anyMatch(data -> data.passenger == entity);
+        return travellingPassengers.stream().anyMatch(data -> data.passengers.contains(entity));
     }
 
     @SubscribeEvent
@@ -299,14 +316,17 @@ public class EventHandlers {
     }
 
     @SubscribeEvent
-    public static void onBlockBreak(BlockEvent.BreakEvent event) {
+    public static void onNeighborNotify(BlockEvent.NeighborNotifyEvent event) {
         World world = event.getWorld();
-        if (world.isRemote)
-            return;
-        if (!(world.provider instanceof WorldProviderPlanet))
-            return;
-        AtmosphereWorldData.get(world).getGraph().onBlockBreak(world, event.getPos());
-        AtmosphereWorldData.get(world).markDirty();
+        if (world.isRemote || !(world.provider instanceof WorldProviderPlanet)) return;
+
+        AtmosphereWorldData data = AtmosphereWorldData.getIfPresent(world);
+        if (data == null) return; // fake world (e.g. LittleTiles animation). fixes crash
+                                  // https://discord.com/channels/881234100504109166/1350749915969490974/1554872016610402348
+
+        if (data.getGraph().onBlockChanged(world, event.getPos())) {
+            data.markDirty();
+        }
     }
 
     @SubscribeEvent
@@ -317,12 +337,13 @@ public class EventHandlers {
                 event.setCanceled(true);
             }
         }
-        if (!event.isCanceled()) {
-            World world = event.getWorld();
-            if (!world.isRemote && world.provider instanceof WorldProviderPlanet) {
-                AtmosphereWorldData.get(world).getGraph().onBlockPlace(world, event.getPos());
-                AtmosphereWorldData.get(world).markDirty();
-            }
+    }
+
+    @SubscribeEvent
+    public static void onPickUpItem(EntityItemPickupEvent event) {
+        if (event.getEntityPlayer() != null &&
+                event.getEntityPlayer().getRidingEntity() instanceof EntityAbstractRocket) {
+            event.setCanceled(true);
         }
     }
 
@@ -374,7 +395,17 @@ public class EventHandlers {
             }
 
             // Create the lander entity
-            EntityLander lander = new EntityLander(targetWorld, entry.getX(), 350, entry.getZ());
+            ICargoInventory lander;
+            int dim = entry.getDimensionId();
+            Planetoid p = Planetoid.PLANETOIDS.inverse().get(dim);
+            double g = PlanetoidHandler.get(dim) == null ? SuSyValues.G0 :
+                    PlanetoidHandler.get(dim).gravity * SuSyValues.G0;
+            if (p.getSurfacePressure() > 10000 && g > 0.4) {
+                lander = new EntityEarthLandingSystem(targetWorld, entry.getX(), 350, entry.getZ());
+            } else {
+                lander = new EntityLander(targetWorld, entry.getX(), 350, entry.getZ());
+            }
+
             CargoItemStackHandler cargo = new CargoItemStackHandler(36, Integer.MAX_VALUE);
             lander.setInventory(cargo);
 
@@ -384,13 +415,13 @@ public class EventHandlers {
                 inventory.deserializeNBT(entry.getInventoryData());
 
                 // Copy items to lander's inventory
-                for (int i = 0; i < Math.min(inventory.getSlots(), lander.getInventory().getSlots()); i++) {
+                for (int i = 0; i < Math.min(inventory.getSlots(), cargo.getSlots()); i++) {
                     cargo.insertItem(0, inventory.getStackInSlot(i), false);
                 }
             }
 
             // Spawn the lander
-            targetWorld.spawnEntity(lander);
+            targetWorld.spawnEntity((Entity) lander);
 
             SusyLog.logger.info("Spawned lander at ({}, {}, {}) in dimension {}", entry.getX(), entry.getY(),
                     entry.getZ(), entry.getDimensionId());

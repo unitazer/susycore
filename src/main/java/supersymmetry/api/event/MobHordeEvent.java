@@ -4,14 +4,17 @@ import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLiving;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.nbt.NBTException;
+import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
+import net.minecraft.world.chunk.Chunk;
 
 import gregtech.api.util.GTTeleporter;
 import gregtech.api.util.TeleportHandler;
@@ -51,10 +54,18 @@ public class MobHordeEvent {
     private ResourceLocation requiredAdvancement = null;
     private boolean runOnce = false;
     private boolean dropPodExplosions = true;
+    public static int spawnHeight = 1000;
+    private static int invasionrange = 150;
+
+    public boolean lastRunUsedPods = false;
+    public double lastRunCenterX;
+    public double lastRunCenterZ;
+
+    public static final String TAG_INVASION_ID = "invasionId";
 
     public MobHordeEvent(Function<EntityPlayer, EntityLiving> entitySupplier, int quantityMin, int quantityMax,
                          String name) {
-        this(entitySupplier, quantityMin, quantityMax, name, 18000);
+        this(entitySupplier, quantityMin, quantityMax, name, 36000);
     }
 
     public MobHordeEvent(Function<EntityPlayer, EntityLiving> entitySupplier, int quantityMin, int quantityMax,
@@ -80,13 +91,22 @@ public class MobHordeEvent {
     public boolean run(EntityPlayer player) throws NBTException {
         MobHordeWorldData worldData = MobHordeWorldData.get(player.world);
         MobHordePlayerData playerData = worldData.getPlayerData(player.getPersistentID());
-        return run(player, playerData::addEntity);
+        UUID invasionId = playerData.getOrCreateInvasionId();
+        boolean ok = run(player, invasionId, playerData::addEntity);
+        if (ok) playerData.recordRaidCenter(this, player);
+        worldData.markDirty();
+        return ok;
     }
 
+    // Old signature kept for other callers: mobs spawned this way are untagged and never auto-despawned.
     public boolean run(EntityPlayer player, Consumer<UUID> uuidConsumer) throws NBTException {
+        return run(player, null, uuidConsumer);
+    }
+
+    public boolean run(EntityPlayer player, UUID invasionId, Consumer<UUID> uuidConsumer) throws NBTException {
+        lastRunUsedPods = false;
         int quantity = (int) (Math.random() * (quantityMax - quantityMin) + quantityMin);
-        if (quantity <= 0)
-            quantity = 1;
+        if (quantity <= 0) quantity = 1;
 
         boolean didSpawn = false;
 
@@ -97,10 +117,16 @@ public class MobHordeEvent {
                 return false;
             }
             for (int i = 0; i < quantity; i++) {
-                didSpawn |= spawnMobWithoutPod(player, uuidConsumer, spawnPos);
+                didSpawn |= spawnMobWithoutPod(player, uuidConsumer, spawnPos, invasionId);
             }
         } else {
-            didSpawn |= spawnMobWithPod(player, uuidConsumer, quantity);
+            didSpawn |= spawnMobWithPod(player, uuidConsumer, quantity, invasionId);
+        }
+
+        if (didSpawn) {
+            MobHordeWorldData worldData = MobHordeWorldData.get(player.world);
+            worldData.getPlayerData(player.getPersistentID()).recordRaidCenter(this, player);
+            worldData.markDirty();
         }
 
         return didSpawn;
@@ -114,8 +140,7 @@ public class MobHordeEvent {
             return false;
         }
         if (requiredAdvancement != null) {
-            return false; // check if the event is locked behind advancement, if so, do not let natural
-                          // spawn
+            return false; // check if the event is locked behind advancement, if so, do not let natural spawn
         }
         if (player.dimension != this.dimension) {
             return false;
@@ -137,7 +162,9 @@ public class MobHordeEvent {
     }
 
     // the great addpattern unfucking
-    public MobHordeEvent addPattern(Function<Double, Vec2> patternFunction, List<String> commands,
+    public MobHordeEvent addPattern(
+                                    Function<Double, Vec2> patternFunction,
+                                    List<String> commands,
                                     Function<EntityPlayer, EntityLiving> supplierOverride,
                                     Function<EntityLiving, EntityLiving> postSpawnModifier) {
         if (patternFunction == null) {
@@ -150,7 +177,7 @@ public class MobHordeEvent {
         this.patternFunctions.add(patternFunction);
         this.commandsOnLandingPattern.add(commands);
         this.entitySupplierOverrides.add(supplierOverride); // can be null
-        this.postSpawnOverrides.add(postSpawnModifier); // can be null
+        this.postSpawnOverrides.add(postSpawnModifier);     // can be null
 
         return this;
     }
@@ -216,36 +243,46 @@ public class MobHordeEvent {
     }
 
     private BlockPos findSpawnPos(EntityPlayer player) {
-        for (int i = 0; i < 12; i++) {
-            double angle = Math.random() * 2 * Math.PI;
-            int radius = 16 + (int) (20 * Math.random());
+        double angle = Math.random() * 2 * Math.PI;
+        int radius = 16 + (int) (20 * Math.random());
 
-            double x = (int) (player.posX + radius * Math.cos(angle)) + 0.5;
-            double z = (int) (player.posZ + radius * Math.sin(angle)) + 0.5;
+        int x = (int) (player.posX + radius * Math.cos(angle));
+        int z = (int) (player.posZ + radius * Math.sin(angle));
 
-            BlockPos topPos = player.world.getTopSolidOrLiquidBlock(new BlockPos(x, 0, z));
-            if (topPos.getY() < player.posY - 2 || topPos.getY() > player.posY + 8)
-                continue;
+        Chunk chunk = player.world.getChunk(new BlockPos(x, 0, z));
+        int localX = x & 15;
+        int localZ = z & 15;
+        int groundY = chunk.getHeightValue(localX, localZ); // Y of highest opaque block + 1
 
-            EntityLiving test = entitySupplier.apply(player);
-            test.setPosition(x, topPos.getY() + 0.01, z);
-            if (!test.getCanSpawnHere() || !test.isNotColliding())
-                continue;
+        BlockPos spawnPos = new BlockPos(x, groundY, z); // already the air block above ground
 
-            return topPos;
-        }
-        return null;
+        if (!player.world.canSeeSky(spawnPos)) return null;
+
+        EntityLiving test = entitySupplier.apply(player);
+        test.setPosition(spawnPos.getX() + 0.5, spawnPos.getY(), spawnPos.getZ() + 0.5);
+
+        if (!test.isNotColliding()) return null;
+
+        return spawnPos;
     }
 
     public boolean spawnMobWithPod(EntityPlayer player, Consumer<UUID> uuidConsumer, int quantity) {
+        return spawnMobWithPod(player, uuidConsumer, quantity, null);
+    }
+
+    public boolean spawnMobWithPod(EntityPlayer player, Consumer<UUID> uuidConsumer, int quantity, UUID invasionId) {
         boolean finishSpawning = false;
+
+        lastRunUsedPods = true;
+        lastRunCenterX = player.posX;
+        lastRunCenterZ = player.posZ;
 
         int patternsCount = patternFunctions.size();
 
         if (patternsCount == 0) {
             // NO PATTERN normal spawn like before
             for (int i = 0; i < quantity; i++) {
-                finishSpawning |= spawnMobWithoutPattern(player, uuidConsumer);
+                finishSpawning |= spawnMobWithoutPattern(player, uuidConsumer, invasionId);
             }
         } else {
             // WITH PATTERNS new code
@@ -308,8 +345,11 @@ public class MobHordeEvent {
                 }
             }
 
-            Double offsetx = player.posX + (Math.random() - 0.5) * 200;
-            Double offsetz = player.posZ + (Math.random() - 0.5) * 200;
+            Double offsetx = player.posX + (Math.random() - 0.5) * invasionrange;
+            Double offsetz = player.posZ + (Math.random() - 0.5) * invasionrange;
+
+            lastRunCenterX = offsetx;
+            lastRunCenterZ = offsetz;
 
             for (int i = 0; i < patternsCount; i++) {
                 int qtyForThisPattern = quantitiesPerPattern[i];
@@ -323,19 +363,31 @@ public class MobHordeEvent {
                 Function<EntityLiving, EntityLiving> patternModifier = (i < postSpawnOverrides.size()) ?
                         postSpawnOverrides.get(i) : null;
 
-                finishSpawning |= spawnMobWithPattern(player, uuidConsumer, qtyForThisPattern, patternFunctions.get(i),
-                        commands, supplierOverride, patternModifier, offsetx, offsetz);
+                finishSpawning |= spawnMobWithPattern(
+                        player,
+                        uuidConsumer,
+                        qtyForThisPattern,
+                        patternFunctions.get(i),
+                        commands,
+                        supplierOverride,
+                        patternModifier,
+                        offsetx,
+                        offsetz,
+                        invasionId);
             }
         }
 
         return finishSpawning;
     }
 
-    private boolean spawnMobWithPattern(EntityPlayer player, Consumer<UUID> uuidConsumer, int quantity,
-                                        Function<Double, Vec2> pattern, List<String> commands,
+    private boolean spawnMobWithPattern(EntityPlayer player, Consumer<UUID> uuidConsumer,
+                                        int quantity,
+                                        Function<Double, Vec2> pattern,
+                                        List<String> commands,
                                         Function<EntityPlayer, EntityLiving> supplierOverride,
                                         Function<EntityLiving, EntityLiving> patternModifier,
-                                        Double centerX, Double centerZ) {
+                                        Double centerX, Double centerZ,
+                                        UUID invasionId) {
         boolean didSpawn = false;
 
         int spawned = 0;
@@ -368,7 +420,7 @@ public class MobHordeEvent {
             // pattern offset
             Vec2 offset = pattern.apply(t);
             double x = centerX + offset.x;
-            double y = 350 + Math.random() * 200;
+            double y = spawnHeight + Math.random() * 200;
             double z = centerZ + offset.z;
 
             if (alignTheBlock) {
@@ -377,8 +429,7 @@ public class MobHordeEvent {
             }
 
             String key = ((int) Math.floor(x)) + "," + ((int) Math.floor(z));
-            if (occupiedCoordinates.contains(key))
-                continue;
+            if (occupiedCoordinates.contains(key)) continue;
             occupiedCoordinates.add(key);
 
             pod.setPosition(x, y, z);
@@ -392,12 +443,15 @@ public class MobHordeEvent {
             if (passenger != null) {
                 passenger.setPosition(x, y, z);
                 passenger.startRiding(pod, true);
-                passenger.onInitialSpawn(player.world.getDifficultyForLocation(new BlockPos(passenger)), null);
+                passenger.onInitialSpawn(
+                        player.world.getDifficultyForLocation(new BlockPos(passenger)),
+                        null);
                 if (patternModifier != null) {
                     patternModifier.apply(passenger);
                 } else if (this.postSpawnModifier != null) {
                     this.postSpawnModifier.apply(passenger);
                 }
+                tagInvasion(passenger, invasionId);
                 player.world.spawnEntity(passenger);
                 passenger.enablePersistence();
                 uuidConsumer.accept(passenger.getPersistentID());
@@ -413,7 +467,7 @@ public class MobHordeEvent {
     }
 
     // moved over bru's old code
-    private boolean spawnMobWithoutPattern(EntityPlayer player, Consumer<UUID> uuidConsumer) {
+    private boolean spawnMobWithoutPattern(EntityPlayer player, Consumer<UUID> uuidConsumer, UUID invasionId) {
         EntityDropPod pod = new EntityDropPod(player.world);
         pod.canExplode(this.dropPodExplosions);
         pod.rotationYaw = (float) (Math.random() * 360);
@@ -421,15 +475,18 @@ public class MobHordeEvent {
         EntityLiving mob = entitySupplier.apply(player);
 
         double x = player.posX + (Math.random() - 0.5) * 60;
-        double y = 350 + Math.random() * 200;
+        double y = spawnHeight + Math.random() * 200;
         double z = player.posZ + (Math.random() - 0.5) * 60;
 
         mob.setPosition(x, y, z);
-        mob.onInitialSpawn(player.world.getDifficultyForLocation(new BlockPos(mob)), null);
+        mob.onInitialSpawn(
+                player.world.getDifficultyForLocation(new BlockPos(mob)),
+                null);
         mob.startRiding(pod, true);
         if (this.postSpawnModifier != null) {
             this.postSpawnModifier.apply(mob);
         }
+        tagInvasion(mob, invasionId);
 
         GTTeleporter teleporter = new GTTeleporter((WorldServer) player.world, x, y, z);
         TeleportHandler.teleport(mob, player.dimension, teleporter, x, y, z);
@@ -454,6 +511,11 @@ public class MobHordeEvent {
     }
 
     public boolean spawnMobWithoutPod(EntityPlayer player, Consumer<UUID> uuidConsumer, BlockPos spawnPos) {
+        return spawnMobWithoutPod(player, uuidConsumer, spawnPos, null);
+    }
+
+    public boolean spawnMobWithoutPod(EntityPlayer player, Consumer<UUID> uuidConsumer, BlockPos spawnPos,
+                                      UUID invasionId) {
         EntityLiving mob = entitySupplier.apply(player);
         mob.setPosition(spawnPos.getX() + 0.5, spawnPos.getY() + 0.01, spawnPos.getZ() + 0.5);
 
@@ -461,6 +523,7 @@ public class MobHordeEvent {
         mob.motionZ = (Math.random() - 0.5) * 0.4;
         mob.motionY = 0.1;
 
+        tagInvasion(mob, invasionId);
         player.world.spawnEntity(mob);
         mob.enablePersistence();
         uuidConsumer.accept(mob.getPersistentID());
@@ -499,5 +562,13 @@ public class MobHordeEvent {
 
     public static void baseline(ResourceLocation advancement, int hate) {
         supersymmetry.common.faction.FactionBaselineRegistry.add(advancement, hate);
+    }
+
+    private static void tagInvasion(Entity entity, UUID invasionId) {
+        if (invasionId == null) return;
+        NBTTagCompound root = entity.getEntityData();
+        NBTTagCompound susy = root.getCompoundTag("susy");
+        susy.setString(TAG_INVASION_ID, invasionId.toString());
+        root.setTag("susy", susy);
     }
 }

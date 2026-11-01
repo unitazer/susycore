@@ -3,6 +3,7 @@ package supersymmetry.common.rocketry;
 import static supersymmetry.api.space.Planetoid.PLANETOIDS;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -10,7 +11,11 @@ import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.math.BlockPos;
 
 import supersymmetry.api.space.Planetoid;
+import supersymmetry.common.entities.EntityAbstractRocket;
 
+/*
+ * Treat this class like a record.
+ */
 public class RocketConfiguration {
 
     /**
@@ -25,6 +30,7 @@ public class RocketConfiguration {
         Orbit
     }
 
+    // FIXME: add turn altitude selector (in km)
     public static class MissionConfiguration {
 
         public final int dimension;
@@ -58,25 +64,49 @@ public class RocketConfiguration {
         }
     }
 
+    public final float turnAltitude;
     private final List<MissionConfiguration> missions = new ArrayList<>();
 
     public RocketConfiguration(NBTTagCompound tag) {
+        float tempTurnAlt = 0;
         for (int i = 0; i < 10; i++) {
             NBTTagCompound missionTag = tag.getCompoundTag("page_" + i);
+            if (i == 0) {
+                tempTurnAlt = missionTag.getFloat("turn_altitude");
+            }
             if (!missionTag.isEmpty()) {
                 MissionConfiguration config = new MissionConfiguration(missionTag);
                 if (i == 0 || !config.isDefault())
                     missions.add(new MissionConfiguration(missionTag));
             }
         }
+        turnAltitude = tempTurnAlt;
+    }
+
+    public RocketConfiguration(List<MissionConfiguration> config) {
+        this.missions.addAll(config);
+        turnAltitude = 0;
+    }
+
+    public void applyTo(NBTTagCompound rocketData) {
+        rocketData.setTag(EntityAbstractRocket.ROCKET_CONFIG_KEY, serialize());
     }
 
     public NBTTagCompound serialize() {
         NBTTagCompound tag = new NBTTagCompound();
+        tag.setFloat("turn_altitude", turnAltitude);
         for (int i = 0; i < missions.size(); i++) {
             tag.setTag("page_" + i, missions.get(i).serialize());
         }
         return tag;
+    }
+
+    public float getTurnAltitude() {
+        return this.turnAltitude;
+    }
+
+    public static RocketConfiguration empty() {
+        return new RocketConfiguration(Collections.emptyList());
     }
 
     public boolean setBudget(int startingDim, int budget) {
@@ -113,11 +143,15 @@ public class RocketConfiguration {
         return true;
     }
 
-    public MissionConfiguration popFront() {
-        return this.missions.remove(0);
+    public RocketConfiguration clipAt(MissionConfiguration clip) {
+        return new RocketConfiguration(this.missions.subList(this.missions.indexOf(clip) + 1, this.missions.size()));
     }
 
     public boolean isEmpty() {
         return this.missions.isEmpty();
+    }
+
+    public List<MissionConfiguration> getMissions() {
+        return this.missions;
     }
 }

@@ -5,6 +5,7 @@ import static net.minecraftforge.fluids.capability.templates.FluidHandlerItemSta
 import java.util.ArrayList;
 import java.util.List;
 
+import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraftforge.common.util.Constants;
@@ -19,13 +20,16 @@ import net.minecraftforge.items.ItemHandlerHelper;
 import org.jetbrains.annotations.NotNull;
 
 import gregtech.api.GTValues;
+import gregtech.api.block.machines.BlockMachine;
 import gregtech.api.unification.FluidUnifier;
 import gregtech.api.unification.OreDictUnifier;
 import gregtech.api.unification.material.Material;
 import gregtech.api.unification.stack.ItemMaterialInfo;
+import gregtech.api.unification.stack.MaterialStack;
 import gregtech.api.util.ItemStackHashStrategy;
 import it.unimi.dsi.fastutil.Hash;
 import it.unimi.dsi.fastutil.objects.ObjectOpenCustomHashSet;
+import supersymmetry.api.rocketry.WeightedBlock;
 import supersymmetry.api.util.SuSyUtility;
 
 public class CargoItemStackHandler implements IItemHandler, INBTSerializable<NBTTagCompound> {
@@ -51,7 +55,7 @@ public class CargoItemStackHandler implements IItemHandler, INBTSerializable<NBT
         nbt.setInteger("maxWeight", maxWeight);
 
         List<List<ItemStack>> cargoList = new ArrayList<>(cargo);
-        for (int i = 0; i < cargo.size(); i++) {
+        for (int i = 0; i < Math.min(cargo.size(), maxVolume); i++) {
             List<ItemStack> itemType = cargoList.get(i);
             NBTTagCompound itemNbt = new NBTTagCompound();
             itemNbt.setInteger("size", itemType.size());
@@ -74,7 +78,7 @@ public class CargoItemStackHandler implements IItemHandler, INBTSerializable<NBT
         this.loading = nbt.getBoolean("loading");
         this.cargo.clear();
 
-        for (int i = 0; i < nbt.getInteger("cargoSize"); i++) {
+        for (int i = 0; i < Math.min(nbt.getInteger("cargoSize"), maxVolume); i++) {
             NBTTagCompound itemNbt = nbt.getCompoundTag("entry" + i);
             int size = itemNbt.getInteger("size");
             List<ItemStack> itemType = new ArrayList<>();
@@ -135,7 +139,7 @@ public class CargoItemStackHandler implements IItemHandler, INBTSerializable<NBT
     }
 
     public CargoItemStackHandler(int maxVolume, int maxWeight) {
-        this.maxVolume = maxVolume;
+        this.maxVolume = Math.min(maxVolume, 128); // sorry
         this.maxWeight = maxWeight;
     }
 
@@ -172,11 +176,11 @@ public class CargoItemStackHandler implements IItemHandler, INBTSerializable<NBT
             ItemStack currentStack = bucket.getLast();
             overflowAmount = currentStack.getCount() + stack.getCount() - currentStack.getMaxStackSize();
             if (overflowAmount > 0 && maxVolume <= currentVolume) {
-                maxAddition = Math.min(maxAddition, currentStack.getMaxStackSize() - currentStack.getCount());
+                maxAddition = Math.min(maxAddition, currentStack.getMaxStackSize() - stack.getCount());
             }
         }
 
-        if (!simulate) {
+        if (!simulate && maxAddition > 0) {
             if (overflowAmount > 0) {
                 // Fill up the last bucket, and add a new one for overflow
                 bucket.getLast().setCount(bucket.getLast().getMaxStackSize());
@@ -205,8 +209,28 @@ public class CargoItemStackHandler implements IItemHandler, INBTSerializable<NBT
             currentMass += (int) (info.getMaterials().stream()
                     .mapToLong((stack) -> stack.material.getMass() * stack.amount).sum() / (GTValues.M / 36));
         } else {
-            currentMass += 98 * 36 * 4; // default mass times 36 times another fudge factor
+            MaterialStack stack = OreDictUnifier.getMaterial(item);
+            if (stack != null && stack.material.getMaterialComponents() != null) { // marker materials grr
+                currentMass += (int) (stack.material.getMass() * stack.amount / (GTValues.M / 36));
+            } else {
+                currentMass += 98 * 36 * 4; // default Tc mass times 36 times another fudge factor
+            }
         }
+
+        if (item.getItem() instanceof ItemBlock bItem && bItem.getBlock() instanceof BlockMachine) {
+            currentMass *= 10; // we do a little trolling
+        }
+
+        if (item.getItem() instanceof ItemBlock bItem && bItem.getBlock() instanceof WeightedBlock<?> block) {
+            currentMass = (int) Math.ceil(block.getMass(item) * 1000);
+        }
+
+        // deliberately set masses should override the generated ones, but still take fluids into account
+        int mass = ItemMassRegistry.getMass(item);
+        if (mass != 0) {
+            currentMass = mass;
+        }
+
         NBTTagCompound tag = item.getTagCompound();
         IFluidHandlerItem fluidHandlerItem = item.getCapability(CapabilityFluidHandler.FLUID_HANDLER_ITEM_CAPABILITY,
                 null);
@@ -220,6 +244,10 @@ public class CargoItemStackHandler implements IItemHandler, INBTSerializable<NBT
             currentMass += getFluidMass(fluid);
         }
         return currentMass;
+    }
+
+    public static int getMass(ItemStack item) {
+        return getMassPerItem(item) * item.getCount();
     }
 
     private static int getFluidMass(FluidStack fluid) {

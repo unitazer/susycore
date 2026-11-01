@@ -4,13 +4,14 @@ import static net.minecraftforge.common.BiomeDictionary.*;
 import static supersymmetry.common.blocks.SuSyBlocks.GOOG;
 import static supersymmetry.common.blocks.SuSyBlocks.REGOLITH;
 import static supersymmetry.common.blocks.SuSyBlocks.susyBlocks;
-import static supersymmetry.common.blocks.SuSyMetaBlocks.SHEETED_FRAMES;
+import static supersymmetry.common.blocks.SuSyMetaBlocks.TANKLESS_FLUID_PIPES;
 
 import java.io.File;
 import java.util.Objects;
 import java.util.function.Function;
 
 import net.minecraft.block.Block;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.resources.I18n;
 import net.minecraft.entity.monster.EntityZombie;
 import net.minecraft.item.Item;
@@ -18,6 +19,7 @@ import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.crafting.IRecipe;
 import net.minecraft.launchwrapper.Launch;
+import net.minecraft.potion.Potion;
 import net.minecraft.world.biome.Biome;
 import net.minecraftforge.event.RegistryEvent;
 import net.minecraftforge.event.entity.player.ItemTooltipEvent;
@@ -33,6 +35,8 @@ import net.minecraftforge.registries.IForgeRegistry;
 import org.jetbrains.annotations.NotNull;
 
 import gregtech.api.block.VariantActiveBlock;
+import gregtech.api.GregTechAPI;
+import gregtech.api.block.IHeatingCoilBlockStats;
 import gregtech.api.block.VariantItemBlock;
 import gregtech.api.metatileentity.multiblock.MultiblockAbility;
 import gregtech.api.modules.ModuleContainerRegistryEvent;
@@ -43,6 +47,7 @@ import gregtech.client.utils.TooltipHelper;
 import gregtech.common.blocks.BlockWireCoil;
 import gregtech.common.items.MetaItems;
 import gregtech.modules.ModuleManager;
+import lombok.val;
 import software.bernie.geckolib3.GeckoLib;
 import supersymmetry.Supersymmetry;
 import supersymmetry.api.SusyLog;
@@ -54,6 +59,7 @@ import supersymmetry.api.fluids.SusyGeneratedFluidHandler;
 import supersymmetry.api.particle.Particles;
 import supersymmetry.api.phys.QuaternionDataSerializer;
 import supersymmetry.api.space.CelestialObjects;
+import supersymmetry.api.unification.material.properties.SuSyPropertyKey;
 import supersymmetry.api.unification.ore.SusyOrePrefix;
 import supersymmetry.api.unification.ore.SusyStoneTypes;
 import supersymmetry.common.blocks.SheetedFrameItemBlock;
@@ -61,7 +67,10 @@ import supersymmetry.common.blocks.SuSyBlocks;
 import supersymmetry.common.blocks.SuSyMetaBlocks;
 import supersymmetry.common.blocks.SusyStoneVariantBlock;
 import supersymmetry.common.item.SuSyMetaItems;
+import supersymmetry.common.item.behavior.HyperDefoliantBehavior;
 import supersymmetry.common.materials.SusyMaterials;
+import supersymmetry.common.pipelike.tanklessfluid.ItemBlockTanklessFluidPipe;
+import supersymmetry.common.potion.PotionDropPodSickness;
 import supersymmetry.common.world.SuSyBiomes;
 import supersymmetry.common.world.SuSyDimensions;
 import supersymmetry.common.world.biome.BiomeLunarHighlands;
@@ -101,17 +110,16 @@ public class CommonProxy {
                     if (!canaryFile.delete()) {
                         SusyLog.logger.warn("Failed to delete canary file: {}", canaryFile.getAbsolutePath());
                     }
+                    // Clean up Groovy cache
+                    File gameDir = Loader.instance().getConfigDir().getParentFile();
+                    File groovyCacheDir = new File(gameDir, "cache/groovy");
+                    if (groovyCacheDir.exists() && groovyCacheDir.isDirectory()) {
+                        SusyLog.logger.info("Cleaning up Groovy cache at: {}", groovyCacheDir.getAbsolutePath());
+                        deleteDirectory(groovyCacheDir);
+                    }
                 }
             } else {
                 SusyLog.logger.warn("Failed to access or create susy config directory");
-            }
-
-            // Clean up Groovy cache
-            File gameDir = Loader.instance().getConfigDir().getParentFile();
-            File groovyCacheDir = new File(gameDir, "cache/groovy");
-            if (groovyCacheDir.exists() && groovyCacheDir.isDirectory()) {
-                SusyLog.logger.info("Cleaning up Groovy cache at: {}", groovyCacheDir.getAbsolutePath());
-                deleteDirectory(groovyCacheDir);
             }
         } catch (Exception e) {
             SusyLog.logger.error("Error during cleanup operations", e);
@@ -143,6 +151,7 @@ public class CommonProxy {
             new MobHordeEvent((p) -> new EntityZombie(p.world), 4, 8, "zombies").setMaximumDistanceUnderground(10)
                     .setNightOnly(true);
         }
+        HyperDefoliantBehavior.registerDispenserBehavior(new ItemStack(SuSyMetaItems.HYPER_DEFOLIANT.getMetaItem()));
     }
 
     public void postLoad() {
@@ -169,8 +178,23 @@ public class CommonProxy {
         }
         registry.register(REGOLITH);
         registry.register(GOOG);
+        registry.register(SuSyBlocks.AIRLOCK_DOOR);
 
-        SHEETED_FRAMES.values().stream().distinct().forEach(registry::register);
+        SuSyMetaBlocks.SHEETED_FRAME_BLOCKS.forEach(registry::register);
+
+        for (val materialRegistry : GregTechAPI.materialManager.getRegistries()) {
+            for (val material : materialRegistry) {
+                if (material.hasProperty(SuSyPropertyKey.TANKLESS_FLUID_PIPE)) {
+                    for (val pipe : TANKLESS_FLUID_PIPES.get(materialRegistry.getModid())) {
+                        if (!pipe.getItemPipeType(pipe.getItem(material)).getOrePrefix().isIgnored(material)) {
+                            pipe.addPipeMaterial(material, material.getProperty(SuSyPropertyKey.TANKLESS_FLUID_PIPE));
+                        }
+                    }
+                }
+            }
+
+            for (val pipe : TANKLESS_FLUID_PIPES.get(materialRegistry.getModid())) registry.register(pipe);
+        }
     }
 
     @SubscribeEvent
@@ -183,8 +207,16 @@ public class CommonProxy {
         susyBlocks.stream().distinct().forEach(vb -> registry.register(createItemBlock(vb, VariantItemBlock::new)));
         registry.register(createItemBlock(REGOLITH, VariantItemBlockFalling::new));
         registry.register(createItemBlock(GOOG, ItemBlock::new));
-        SHEETED_FRAMES.values().stream().distinct().map(block -> createItemBlock(block, SheetedFrameItemBlock::new))
+        SuSyMetaBlocks.SHEETED_FRAME_BLOCKS.stream().map(block -> createItemBlock(block, SheetedFrameItemBlock::new))
                 .forEach(registry::register);
+
+        for (val materialRegistry : GregTechAPI.materialManager.getRegistries()) {
+            for (val pipe : TANKLESS_FLUID_PIPES.get(materialRegistry.getModid())) {
+                if (!pipe.getEnabledMaterials().isEmpty()) {
+                    registry.register(createItemBlock(pipe, ItemBlockTanklessFluidPipe::new));
+                }
+            }
+        }
     }
 
     @SubscribeEvent(priority = EventPriority.HIGH)
@@ -210,8 +242,7 @@ public class CommonProxy {
         Materials.Aluminium.addFlags("continuously_cast");
         SusyGeneratedFluidHandler.init();
 
-        // SusyMaterials.removeFlags();
-        SusyMaterials.addFlags();
+        SusyMaterials.changeFlags();
     }
 
     @SubscribeEvent
@@ -224,17 +255,40 @@ public class CommonProxy {
     }
 
     private static void handleCoilTooltips(ItemTooltipEvent event) {
-        Block block = Block.getBlockFromItem(event.getItemStack().getItem());
-        if (block instanceof BlockWireCoil && TooltipHelper.isShiftDown()) {
-            ItemStack itemStack = event.getItemStack();
-            Item item = itemStack.getItem();
+        ItemStack itemStack = event.getItemStack();
+        if (!(itemStack.getItem() instanceof VariantItemBlock)) {
+            return;
+        }
+        VariantItemBlock itemBlock = (VariantItemBlock) itemStack.getItem();
+        IBlockState state = itemBlock.getBlockState(itemStack);
+        IHeatingCoilBlockStats coilStats = GregTechAPI.HEATING_COILS.get(state);
+        if (coilStats == null) {
+            return;
+        }
+        Block block = Block.getBlockFromItem(itemStack.getItem());
+        if (block instanceof BlockWireCoil) {
             BlockWireCoil wireCoilBlock = (BlockWireCoil) block;
-            VariantItemBlock itemBlock = (VariantItemBlock) item;
-            BlockWireCoil.CoilType coilType = (BlockWireCoil.CoilType) wireCoilBlock
-                    .getState(itemBlock.getBlockState(itemStack));
-            event.getToolTip().add(I18n.format("tile.wire_coil.tooltip_evaporation", new Object[0]));
-            event.getToolTip().add(I18n.format("tile.wire_coil.tooltip_energy_evaporating",
-                    new Object[] { coilType.getCoilTemperature() / 1000 }));
+            BlockWireCoil.CoilType originalStats = wireCoilBlock.getState(state);
+            String oldTemperature = I18n.format(
+                    "tile.wire_coil.tooltip_heat",
+                    originalStats.getCoilTemperature());
+            String newTemperature = I18n.format(
+                    "tile.wire_coil.tooltip_heat",
+                    coilStats.getCoilTemperature());
+            int index = event.getToolTip().indexOf(oldTemperature);
+            if (index >= 0) {
+                event.getToolTip().set(index, newTemperature);
+            }
+        }
+
+        if (TooltipHelper.isShiftDown()) {
+            event.getToolTip().add(
+                    I18n.format("tile.wire_coil.tooltip_evaporation"));
+
+            event.getToolTip().add(
+                    I18n.format(
+                            "tile.wire_coil.tooltip_energy_evaporating",
+                            coilStats.getCoilTemperature() / 1000));
         }
     }
 
@@ -287,6 +341,10 @@ public class CommonProxy {
         addTypes(SuSyBiomes.LUNAR_KREEP_TERRANE, Type.DEAD, Type.VOID, Type.NETHER);
 
         SuSyDimensions.init();
-        // ReEntryDimensions.init();
+    }
+
+    @SubscribeEvent
+    public static void registerPotions(@NotNull RegistryEvent.Register<Potion> event) {
+        event.getRegistry().register(PotionDropPodSickness.INSTANCE);
     }
 }

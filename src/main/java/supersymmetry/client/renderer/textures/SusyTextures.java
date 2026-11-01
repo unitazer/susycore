@@ -10,6 +10,7 @@ import gregtech.client.renderer.texture.cube.*;
 import gregtech.client.renderer.texture.custom.DrumRenderer;
 import supersymmetry.api.util.SuSyUtility;
 import supersymmetry.client.renderer.textures.custom.ExtenderRender;
+import supersymmetry.client.renderer.textures.custom.VatCasingRenderer;
 
 public class SusyTextures {
 
@@ -66,8 +67,6 @@ public class SusyTextures {
     public static final OrientedOverlayRenderer ALD_OVERLAY = new OrientedOverlayRenderer("machines/ald");
     public static final OrientedOverlayRenderer ION_IMPLANTER_OVERLAY = new OrientedOverlayRenderer(
             "machines/ion_implanter");
-    public static final OrientedOverlayRenderer SPIN_COATER_OVERLAY = new OrientedOverlayRenderer(
-            "machines/spin_coater");
     public static final OrientedOverlayRenderer SPUTTER_DEPOSITION_OVERLAY = new OrientedOverlayRenderer(
             "machines/sputter_deposition");
     public static final OrientedOverlayRenderer PHASE_SEPARATOR_OVERLAY = new OrientedOverlayRenderer(
@@ -78,8 +77,24 @@ public class SusyTextures {
             "machines/multiblocks/catalytic_reformer");
     public static final OrientedOverlayRenderer INCINERATOR_OVERLAY = new OrientedOverlayRenderer(
             "machines/incinerator");
+    public static final ICubeRenderer RIE_OVERLAY = new OrientedOverlayRenderer(
+            "machines/reactive_ion_etcher");
+    public static final ICubeRenderer RESIST_PROCESSOR_OVERLAY = new OrientedOverlayRenderer(
+            "machines/resist_processor");
+    public static final ICubeRenderer PLASMA_ASHER_OVERLAY = new OrientedOverlayRenderer("machines/plasma_asher");
+    public static final ICubeRenderer WIRE_BONDER_OVERLAY = new OrientedOverlayRenderer("machines/wire_bonder");
+
+    public static final OrientedOverlayRenderer EXTENDED_CHISEL_OVERLAY = new OrientedOverlayRenderer(
+            "machines/extended_chisel_maker");
 
     public static final OrientedOverlayRenderer FUEL_CELL_OVERLAY = new OrientedOverlayRenderer("machines/fuel_cell");
+
+    public static final VatCasingRenderer CLARIFIER_VAT_RENDERER = new VatCasingRenderer(
+            "gregtech:blocks/casings/multiblock_tank/clarifier_on",
+            "gregtech:blocks/casings/solid/machine_casing_solid_steel");
+    public static final VatCasingRenderer FLOTATION_VAT_RENDERER = new VatCasingRenderer(
+            "gregtech:blocks/casings/multiblock_tank/flotation_on",
+            "gregtech:blocks/casings/solid/machine_casing_clean_stainless_steel");
 
     public static final OrientedOverlayRenderer FLUID_COMPRESSOR_OVERLAY = new OrientedOverlayRenderer(
             "machines/fluid_compressor");
@@ -242,6 +257,22 @@ public class SusyTextures {
 
     public static final DrumRenderer PLASTIC_CAN = new DrumRenderer("storage/drums/plastic_can");
 
+    // Problem causers
+
+    public static final OrientedOverlayRenderer TOXIC_SPEWER_OVERLAY = new OrientedOverlayRenderer(
+            "machines/problem_causers/toxic_spewer");
+    public static final OrientedOverlayRenderer DEFOLIATOR_OVERLAY = new OrientedOverlayRenderer(
+            "machines/problem_causers/defoliator");
+    public static final OrientedOverlayRenderer DUST_AGITATOR_OVERLAY = new OrientedOverlayRenderer(
+            "machines/problem_causers/dust_agitator");
+    public static final OrientedOverlayRenderer INTERFERENCE_DYNAMO_OVERLAY = new OrientedOverlayRenderer(
+            "machines/problem_causers/interference_dynamo");
+    public static final OrientedOverlayRenderer HYDROCARBON_SATURATOR_OVERLAY = new OrientedOverlayRenderer(
+            "machines/problem_causers/hydrocarbon_saturator");
+
+    public static final OrientedOverlayRenderer FEDERATION_DROP_OVERLAY = new OrientedOverlayRenderer(
+            "machines/problem_causers/federation_drop");
+
     // Stock stuff
     // public static final SimpleCubeRenderer STOCK_MACHINE_CASING = new
     // SimpleCubeRenderer("rail_interfaces/stock_machine_casing/stock_machine_casing");
@@ -279,4 +310,19 @@ public class SusyTextures {
                     "gregtech:blocks/decoration/large_metalsheet_" + SuSyUtility.getNameForColor(color));
         }
     }
+
+    public static final SimpleOverlayRenderer[] TANK_OVERLAYS = new SimpleOverlayRenderer[] {
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_1"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_2"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_3"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_4"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_5"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_6"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_7"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_8"),
+            new SimpleOverlayRenderer("machines/multiblocks/tank/tank_overlay_9")
+    };
+
+    public static SimpleCubeRenderer MONEL_400_CASING = new SimpleCubeRenderer(
+            "gregtech:blocks/multiblock_casing/monel_400_casing");
 }

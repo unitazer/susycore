@@ -39,8 +39,13 @@ import supersymmetry.api.blocks.VariantAxialRotatableBlock;
 import supersymmetry.common.blocks.*;
 import supersymmetry.common.blocks.BlockConveyor;
 import supersymmetry.common.blocks.BlockCoolingCoil;
+import supersymmetry.common.blocks.BlockEccentricRoll;
+import supersymmetry.common.blocks.BlockGirthGearTooth;
+import supersymmetry.common.blocks.BlockHeliostat;
+import supersymmetry.common.blocks.BlockRobotArm;
 import supersymmetry.common.blocks.BlockSinteringBrick;
 import supersymmetry.common.blocks.SuSyBlocks;
+import supersymmetry.common.blocks.active.BlockActiveEccentricRoll;
 import supersymmetry.common.blocks.rocketry.BlockProcessorCluster;
 import supersymmetry.common.metatileentities.multi.electric.MetaTileEntitySolarFurnace;
 
@@ -151,6 +156,25 @@ public class SuSyPredicates {
             () -> new BlockInfo[] { new BlockInfo(SuSyBlocks.EVAPORATION_BED.getDefaultState()) })
             .addTooltips("susy.multiblock.pattern.error.coils_or_bed");
 
+    private static final Supplier<TraceabilityPredicate> INDUCTION_CRUCIBLE = () -> new TraceabilityPredicate(
+            blockWorldState -> {
+                IBlockState state = blockWorldState.getBlockState();
+                if (state.getBlock() instanceof BlockInductionCrucible) {
+                    BlockInductionCrucible.InductionCrucibleType type = SuSyBlocks.INDUCTION_CRUCIBLE.getState(state);
+                    Object currentCrucible = blockWorldState.getMatchContext().getOrPut("InductionCrucibleType", type);
+                    if (!currentCrucible.equals(type)) {
+                        blockWorldState.setError(new PatternStringError("gregtech.multiblock.pattern.error.coils"));
+                        return false;
+                    }
+                    blockWorldState.getMatchContext().getOrPut("VABlock", new LinkedList<>())
+                            .add(blockWorldState.getPos());
+                    return true;
+                }
+                return false;
+            }, () -> Arrays.stream(BlockInductionCrucible.InductionCrucibleType.values())
+                    .map(type -> new BlockInfo(SuSyBlocks.INDUCTION_CRUCIBLE.getState(type)))
+                    .toArray(BlockInfo[]::new));
+
     /**
      * A predicate for allowing using only the same type of metal sheet blocks in a structure
      * This includes predicate for both small & large metal sheets
@@ -238,6 +262,10 @@ public class SuSyPredicates {
         return COILS_OR_BED.get().or(EVAP_BED.get());
     }
 
+    @NotNull public static TraceabilityPredicate inductionCrucibles() {
+        return INDUCTION_CRUCIBLE.get();
+    }
+
     protected static EnumFacing getRelativeFacing(MultiblockControllerBase mte, RelativeDirection dir) {
         return dir.getRelativeFacing(mte.getFrontFacing(), mte.getUpwardsFacing(), mte.isFlipped());
     }
@@ -309,7 +337,8 @@ public class SuSyPredicates {
     @NotNull public static TraceabilityPredicate eccentricRolls(EnumFacing facing) {
         return new TraceabilityPredicate(bws -> {
             IBlockState state = bws.getBlockState();
-            if (state.getBlock() instanceof BlockEccentricRoll) {
+            if (state.getBlock() instanceof BlockEccentricRoll ||
+                    state.getBlock() instanceof BlockActiveEccentricRoll) {
 
                 // Corrects the direction of the eccentric roll, while ignoring the in/active state
                 if (state.getValue(BlockDirectional.FACING) != facing) {
