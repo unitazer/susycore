@@ -25,16 +25,6 @@ import supersymmetry.api.phys.Rapier;
 
 public final class PhysicsConstraint {
 
-    private static final int WIRE_LEN = 62;
-    private static final int MOTOR_WIRE_OFFSET = 12;
-    private static final int MOTOR_WIRE_STRIDE = 6;
-    private static final int FRAME_A_WIRE_OFFSET = 48;
-    private static final int FRAME_B_WIRE_OFFSET = 55;
-    private static final int COUPLED_SHIFT = 6;
-    private static final int LIMIT_SHIFT = 12;
-    private static final int MOTOR_SHIFT = 18;
-    private static final int FORCE_BASED_SHIFT = 24;
-    private static final int CONTACTS_BIT = 1 << 30;
     private static final int RETRY_INTERVAL_TICKS = 20;
     private static final int MISS_WARN_TICKS = 1200;
     private static final double BLOCK_CENTER_OFFSET = 0.5;
@@ -296,13 +286,9 @@ public final class PhysicsConstraint {
     }
 
     private boolean instantiate(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
-        EnumSet<Axis> limited = EnumSet.noneOf(Axis.class);
-        EnumSet<Axis> motorized = EnumSet.noneOf(Axis.class);
-        EnumSet<Axis> forceBased = EnumSet.noneOf(Axis.class);
-        double[] data = wireData(self, other, limited, motorized, forceBased);
+        JointWire wire = buildWire(self, other);
         int otherTag = other == null ? anchorTag : other.getEntityId();
-        long handle = Rapier.addJoint(self.getEntityWorld(), self.getEntityId(), otherTag,
-                flags(limited, motorized, forceBased), data);
+        long handle = Rapier.addJoint(self.getEntityWorld(), self.getEntityId(), otherTag, wire.flags(), wire.data());
         if (handle == 0) {
             return false;
         }
@@ -311,55 +297,31 @@ public final class PhysicsConstraint {
         return true;
     }
 
-    private double[] wireData(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other, EnumSet<Axis> limited,
-                              EnumSet<Axis> motorized, EnumSet<Axis> forceBased) {
-        double[] data = new double[WIRE_LEN];
-        for (Axis axis : Axis.values()) {
-            data[2 * axis.index()] = Double.NEGATIVE_INFINITY;
-            data[2 * axis.index() + 1] = Double.POSITIVE_INFINITY;
-            data[MOTOR_WIRE_OFFSET + MOTOR_WIRE_STRIDE * axis.index() + 4] = Double.MAX_VALUE;
-        }
+    private JointWire buildWire(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
+        JointWire wire = new JointWire(mask(lockedAxes), mask(coupledAxes), contactsEnabled);
         Vec3d restOffset = formationRestOffset(self, other);
         for (Map.Entry<Axis, AxisState> entry : axes.entrySet()) {
             if (lockedAxes.contains(entry.getKey())) continue;
-            writeAxisState(data, entry.getKey(), entry.getValue(), restOffset, limited, motorized, forceBased);
+            writeAxisState(wire, entry.getKey(), entry.getValue(), restOffset);
         }
-        writeFrame(data, FRAME_A_WIRE_OFFSET, anchorSelfBlock, self);
-        if (other == null) {
-            writeStaticFrame(data, self);
-        } else {
-            writeFrame(data, FRAME_B_WIRE_OFFSET, anchorOtherBlock, other);
-        }
-        return data;
+        wire.frameA(anchorCenter(anchorSelfBlock).subtract(self.getRotationPoint()));
+        Vec3d frameB = other == null ?
+                self.worldPointFromLocal(anchorCenter(anchorSelfBlock)).subtract(anchorCenter(anchorOtherBlock)) :
+                anchorCenter(anchorOtherBlock).subtract(other.getRotationPoint());
+        wire.frameB(frameB);
+        return wire;
     }
 
-    private static void writeAxisState(double[] data, Axis axis, AxisState state, Vec3d restOffset,
-                                       EnumSet<Axis> limited, EnumSet<Axis> motorized, EnumSet<Axis> forceBased) {
+    private static void writeAxisState(JointWire wire, Axis axis, AxisState state, Vec3d restOffset) {
         if (state.limitMin != null) {
-            limited.add(axis);
-            data[2 * axis.index()] = state.limitMin;
-            data[2 * axis.index() + 1] = state.limitMax;
+            wire.limit(axis, state.limitMin, state.limitMax);
         }
         if (state.motor == null) return;
         Motor motor = state.motor;
-        motorized.add(axis);
-        if (motor.forceBased) {
-            forceBased.add(axis);
-        }
-        int slot = MOTOR_WIRE_OFFSET + MOTOR_WIRE_STRIDE * axis.index();
-        data[slot] = motor.spring ? (Axis.LINEAR.contains(axis) ? component(restOffset, axis) : 0.0) : motor.targetPos;
-        data[slot + 1] = motor.targetVel;
-        data[slot + 2] = motor.stiffness;
-        data[slot + 3] = motor.damping;
-        data[slot + 4] = motor.maxForce;
-    }
-
-    private void writeStaticFrame(double[] data, PhysicsWorldEntity self) {
-        Vec3d pivot = self.worldPointFromLocal(anchorCenter(anchorSelfBlock)).subtract(anchorCenter(anchorOtherBlock));
-        data[FRAME_B_WIRE_OFFSET] = pivot.x;
-        data[FRAME_B_WIRE_OFFSET + 1] = pivot.y;
-        data[FRAME_B_WIRE_OFFSET + 2] = pivot.z;
-        data[FRAME_B_WIRE_OFFSET + 6] = 1.0;
+        double targetPos = motor.spring ? (Axis.LINEAR.contains(axis) ? component(restOffset, axis) : 0.0) :
+                motor.targetPos;
+        wire.motor(axis, targetPos, motor.targetVel, motor.stiffness, motor.damping, motor.maxForce,
+                motor.forceBased);
     }
 
     public void writeToNBT(NBTTagCompound tag) {
@@ -522,17 +484,6 @@ public final class PhysicsConstraint {
         return new Vec3d(anchorBlock).add(BLOCK_CENTER_OFFSET, BLOCK_CENTER_OFFSET, BLOCK_CENTER_OFFSET);
     }
 
-    private static void writeFrame(double[] data, int offset, BlockPos anchorBlock, PhysicsWorldEntity entity) {
-        Vec3d center = anchorCenter(anchorBlock).subtract(entity.getRotationPoint());
-        data[offset] = center.x;
-        data[offset + 1] = center.y;
-        data[offset + 2] = center.z;
-        data[offset + 3] = 0.0;
-        data[offset + 4] = 0.0;
-        data[offset + 5] = 0.0;
-        data[offset + 6] = 1.0;
-    }
-
     private boolean rejectLocked(Axis axis) {
         if (!lockedAxes.contains(axis)) {
             return false;
@@ -558,12 +509,6 @@ public final class PhysicsConstraint {
 
     private AxisState state(Axis axis) {
         return axes.computeIfAbsent(axis, key -> new AxisState());
-    }
-
-    private int flags(EnumSet<Axis> limited, EnumSet<Axis> motorized, EnumSet<Axis> forceBased) {
-        int flags = mask(lockedAxes) | (mask(coupledAxes) << COUPLED_SHIFT) | (mask(limited) << LIMIT_SHIFT) |
-                (mask(motorized) << MOTOR_SHIFT) | (mask(forceBased) << FORCE_BASED_SHIFT);
-        return contactsEnabled ? flags | CONTACTS_BIT : flags;
     }
 
     private Vec3d formationRestOffset(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {

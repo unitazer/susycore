@@ -35,13 +35,43 @@ public class TestingBarrelMTE extends MultiblockWithDisplayBase {
 
     @Override
     protected @NotNull BlockPattern createStructurePattern() {
-        String[] column = new String[BARREL_LENGTH + 1];
-        column[0] = "S";
-        for (int i = 1; i <= BARREL_LENGTH; i++) {
-            column[i] = "C";
+        final double outerDiameter = 10.0D;
+        final double innerRadius = 1.5D;
+
+        final int size = (int) outerDiameter + 1;
+        final double center = (size - 1) / 2.0D;
+        final double outerRadius = outerDiameter / 2.0D;
+
+        final int rowLength = Math.max(1, BARREL_LENGTH);
+        final String casing = "C".repeat(rowLength);
+        final String air = " ".repeat(rowLength);
+        final String controller = "S" + casing.substring(1);
+
+        var factory = FactoryBlockPattern.start();
+        boolean placedController = false;
+
+        for (int y = 0; y < size; y++) {
+            String[] aisle = new String[size];
+
+            for (int z = 0; z < size; z++) {
+                double dy = y - center;
+                double dz = z - center;
+                double distSq = dy * dy + dz * dz;
+
+                boolean inRing = distSq <= outerRadius * outerRadius && distSq >= innerRadius * innerRadius;
+
+                aisle[z] = inRing ? casing : air;
+
+                if (inRing && !placedController) {
+                    aisle[z] = controller;
+                    placedController = true;
+                }
+            }
+
+            factory.aisle(aisle);
         }
-        return FactoryBlockPattern.start()
-                .aisle(column)
+
+        return factory
                 .where('S', selfPredicate())
                 .where('C', states(MetaBlocks.METAL_CASING.getState(MetalCasingType.INVAR_HEATPROOF)))
                 .build();

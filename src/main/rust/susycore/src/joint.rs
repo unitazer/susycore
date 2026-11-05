@@ -6,6 +6,7 @@ use rapier3d::glamx::Quat;
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::prelude::{
   GenericJoint, GenericJointBuilder, ImpulseJointHandle, JointAxesMask, JointAxis, MotorModel,
+  RigidBodyHandle,
 };
 
 use crate::Real;
@@ -14,6 +15,12 @@ use crate::scene::Scene;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct JointId(pub u32);
+
+fn parse_joint_id(value: jlong) -> Option<JointId> {
+  (1..=u32::MAX as i64)
+    .contains(&value)
+    .then_some(JointId(value as u32))
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct JointRecord {
@@ -108,6 +115,21 @@ impl MotorSpec {
     })
   }
 
+  fn from_wire(
+    data: &[jdouble; JOINT_WIRE_BUF_LEN],
+    base: usize,
+    force_based: bool,
+  ) -> Option<Self> {
+    Self::validated(
+      force_based,
+      data[base],
+      data[base + 1],
+      data[base + 2],
+      data[base + 3],
+      data[base + 4],
+    )
+  }
+
   fn rapier_model(self) -> MotorModel {
     if self.force_based {
       MotorModel::ForceBased
@@ -138,28 +160,13 @@ const MOTOR_WIRE_OFFSET: usize = 12;
 const MOTOR_WIRE_STRIDE: usize = 6;
 const FRAME_WIRE_OFFSET: usize = 48;
 const FRAME_WIRE_LEN: usize = 7;
-pub const JOINT_WIRE_LEN: usize = 62;
+pub const JOINT_WIRE_BUF_LEN: usize = 62;
 
 fn axis_mask(flags: jint, shift: i32) -> u8 {
   ((flags >> shift) & 0x3F) as u8
 }
 
-fn motor_from_wire(
-  data: &[jdouble; JOINT_WIRE_LEN],
-  base: usize,
-  force_based: bool,
-) -> Option<MotorSpec> {
-  MotorSpec::validated(
-    force_based,
-    data[base],
-    data[base + 1],
-    data[base + 2],
-    data[base + 3],
-    data[base + 4],
-  )
-}
-
-fn frame_from_wire(data: &[jdouble; JOINT_WIRE_LEN], offset: usize) -> Pose {
+fn frame_from_wire(data: &[jdouble; JOINT_WIRE_BUF_LEN], offset: usize) -> Pose {
   Pose::from_parts(
     Vec3::new(
       data[offset] as Real,
@@ -204,7 +211,7 @@ impl JointSpec {
     self
   }
 
-  fn from_wire(flags: jint, data: &[jdouble; JOINT_WIRE_LEN]) -> Option<Self> {
+  fn from_wire(flags: jint, data: &[jdouble; JOINT_WIRE_BUF_LEN]) -> Option<Self> {
     let locked_bits = axis_mask(flags, 0);
     let coupled_bits = axis_mask(flags, 6);
     let limit_bits = axis_mask(flags, 12);
@@ -224,7 +231,7 @@ impl JointSpec {
         axis.limits = Some((min, max));
       }
       if motor_bits & (1 << index) != 0 {
-        axis.motor = Some(motor_from_wire(
+        axis.motor = Some(MotorSpec::from_wire(
           data,
           MOTOR_WIRE_OFFSET + index * MOTOR_WIRE_STRIDE,
           force_bits & (1 << index) != 0,
@@ -269,25 +276,25 @@ fn apply_motor(joint: &mut GenericJoint, axis: Axis, motor: MotorSpec) {
 }
 
 impl Scene {
+  fn joint_endpoint(&self, entity: EntityId) -> Option<RigidBodyHandle> {
+    let Some(body) = self.chunklet_bodies.get(&entity) else {
+      log::warn!("add_joint on missing body {}", entity.0);
+      return None;
+    };
+    if body.colliders.is_empty() {
+      log::warn!("add_joint on colliderless body {}", entity.0);
+      return None;
+    }
+    Some(body.rb)
+  }
+
   pub fn add_joint(&mut self, a: EntityId, b: EntityId, spec: &JointSpec) -> Option<JointId> {
     if a == b {
       log::warn!("add_joint with identical endpoints {}", a.0);
       return None;
     }
-    let (Some(rb_a), Some(rb_b)) = (self.rb_of(a), self.rb_of(b)) else {
-      log::warn!("add_joint on missing body {} or {}", a.0, b.0);
-      return None;
-    };
-    for entity in [a, b] {
-      if self
-        .chunklet_bodies
-        .get(&entity)
-        .is_some_and(|entry| entry.colliders.is_empty())
-      {
-        log::warn!("add_joint on colliderless body {}", entity.0);
-        return None;
-      }
-    }
+    let rb_a = self.joint_endpoint(a)?;
+    let rb_b = self.joint_endpoint(b)?;
     let mut locked_mask = JointAxesMask::empty();
     let mut coupled_mask = JointAxesMask::empty();
     let mut builder = GenericJointBuilder::new(locked_mask)
@@ -391,10 +398,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addJoint(
   data: JDoubleArray,
 ) -> jlong {
   debug_assert!(world_id >= 0);
-  let mut buffer = [0.0; JOINT_WIRE_LEN];
+  let mut buffer = [0.0; JOINT_WIRE_BUF_LEN];
   let read = env
     .with_env(|env| -> Result<bool, jni::errors::Error> {
-      if data.len(env)? != JOINT_WIRE_LEN {
+      if data.len(env)? != JOINT_WIRE_BUF_LEN {
         return Ok(false);
       }
       data.get_region(env, 0, &mut buffer)?;
@@ -402,7 +409,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addJoint(
     })
     .resolve::<ThrowRuntimeExAndDefault>();
   if !read {
-    log::warn!("addJoint data must be exactly {JOINT_WIRE_LEN} doubles");
+    log::warn!("addJoint data must be exactly {JOINT_WIRE_BUF_LEN} doubles");
     return 0;
   }
   let Some(spec) = JointSpec::from_wire(flags, &buffer) else {
@@ -430,14 +437,11 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeJoint(
   joint: jlong,
 ) -> bool {
   debug_assert!(world_id >= 0);
-  if joint <= 0 || joint > u32::MAX as i64 {
+  let Some(id) = parse_joint_id(joint) else {
     log::warn!("removeJoint on invalid joint id {joint}");
     return false;
-  }
-  Scene::with_scene_mut(world_id as usize, |scene| {
-    scene.remove_joint(JointId(joint as u32))
-  })
-  .unwrap_or(false)
+  };
+  Scene::with_scene_mut(world_id as usize, |scene| scene.remove_joint(id)).unwrap_or(false)
 }
 
 #[unsafe(no_mangle)]
@@ -455,10 +459,10 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setJointMotor(
   force_based: jboolean,
 ) -> bool {
   debug_assert!(world_id >= 0);
-  if joint <= 0 || joint > u32::MAX as i64 {
+  let Some(id) = parse_joint_id(joint) else {
     log::warn!("setJointMotor on invalid joint id {joint}");
     return false;
-  }
+  };
   let Ok(axis_index) = usize::try_from(axis) else {
     log::warn!("setJointMotor on invalid axis {axis}");
     return false;
@@ -474,7 +478,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setJointMotor(
     return false;
   };
   Scene::with_scene_mut(world_id as usize, |scene| {
-    scene.set_joint_motor(JointId(joint as u32), axis_index, spec)
+    scene.set_joint_motor(id, axis_index, spec)
   })
   .unwrap_or(false)
 }
@@ -531,7 +535,7 @@ mod tests {
 
   #[test]
   fn wire_flags_and_data_parse() {
-    let mut data = [0.0; JOINT_WIRE_LEN];
+    let mut data = [0.0; JOINT_WIRE_BUF_LEN];
     data[0] = -1.0;
     data[1] = 2.0;
     data[12] = 5.0;
@@ -765,15 +769,15 @@ mod tests {
 
   #[test]
   fn from_wire_rejects_bad_frames_and_limits() {
-    let mut data = [0.0; JOINT_WIRE_LEN];
+    let mut data = [0.0; JOINT_WIRE_BUF_LEN];
     let flags = 1 << 12;
     data[0] = 2.0;
     data[1] = 1.0;
     assert!(JointSpec::from_wire(flags, &data).is_none());
-    let mut data = [0.0; JOINT_WIRE_LEN];
+    let mut data = [0.0; JOINT_WIRE_BUF_LEN];
     data[51] = f64::NAN;
     assert!(JointSpec::from_wire(0, &data).is_none());
-    let mut data = [0.0; JOINT_WIRE_LEN];
+    let mut data = [0.0; JOINT_WIRE_BUF_LEN];
     data[51] = 5.0;
     assert!(JointSpec::from_wire(0, &data).is_none());
   }
@@ -839,7 +843,7 @@ mod tests {
   #[test]
   fn wire_motor_survives_unlimited_force_sentinel() {
     let flags = (1 << 18) | (1 << 24);
-    let mut data = [0.0; JOINT_WIRE_LEN];
+    let mut data = [0.0; JOINT_WIRE_BUF_LEN];
     data[16] = 1.7976931348623157e308;
     data[54] = 1.0;
     data[61] = 1.0;
@@ -861,10 +865,10 @@ mod tests {
   #[test]
   fn wire_motor_rejects_nan_and_negative_max_force() {
     let flags = (1 << 18) | (1 << 24);
-    let mut data = [0.0; JOINT_WIRE_LEN];
+    let mut data = [0.0; JOINT_WIRE_BUF_LEN];
     data[16] = f64::NAN;
     assert!(JointSpec::from_wire(flags, &data).is_none());
-    let mut data = [0.0; JOINT_WIRE_LEN];
+    let mut data = [0.0; JOINT_WIRE_BUF_LEN];
     data[16] = -1.0;
     assert!(JointSpec::from_wire(flags, &data).is_none());
     assert!(

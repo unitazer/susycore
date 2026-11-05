@@ -79,7 +79,7 @@ impl TerrainData {
       .get(&PackedChunkletCoords::from_xyz(x, y, z))
       .copied()
   }
-
+  #[allow(clippy::too_many_arguments)]
   pub fn update(
     &mut self,
     cx: i32,
