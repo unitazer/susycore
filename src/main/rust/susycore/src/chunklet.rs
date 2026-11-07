@@ -1,4 +1,3 @@
-use core::f32;
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::parry::bounding_volume::{Aabb, BoundingSphere};
 use rapier3d::parry::query::{PointProjection, Ray, RayIntersection};
@@ -91,8 +90,8 @@ impl Chunklet {
     let [minx, miny, minz] = min;
     let [maxx, maxy, maxz] = max;
     let bounds = Aabb::new(
-      Vec3::new(minx as f32, miny as f32, minz as f32),
-      Vec3::new((maxx + 1) as f32, (maxy + 1) as f32, (maxz + 1) as f32),
+      Vec3::new(minx as Real, miny as Real, minz as Real),
+      Vec3::new((maxx + 1) as Real, (maxy + 1) as Real, (maxz + 1) as Real),
     );
 
     Self {
@@ -108,12 +107,12 @@ impl Chunklet {
   fn on_boundary(&self, x: u8, y: u8, z: u8) -> bool {
     let min = self.aabb.mins;
     let max = self.aabb.maxs;
-    (x as f32) == min.x
-      || (x as f32 + 1.0) == max.x
-      || (y as f32) == min.y
-      || (y as f32 + 1.0) == max.y
-      || (z as f32) == min.z
-      || (z as f32 + 1.0) == max.z
+    (x as Real) == min.x
+      || (x as Real + 1.0) == max.x
+      || (y as Real) == min.y
+      || (y as Real + 1.0) == max.y
+      || (z as Real) == min.z
+      || (z as Real + 1.0) == max.z
   }
   fn recompute_aabb(&mut self) {
     let mut min = [u8::MAX, u8::MAX, u8::MAX];
@@ -133,11 +132,11 @@ impl Chunklet {
     }
     if found {
       self.aabb = Aabb::new(
-        Vec3::new(min[0] as f32, min[1] as f32, min[2] as f32),
+        Vec3::new(min[0] as Real, min[1] as Real, min[2] as Real),
         Vec3::new(
-          (max[0] + 1) as f32,
-          (max[1] + 1) as f32,
-          (max[2] + 1) as f32,
+          (max[0] + 1) as Real,
+          (max[1] + 1) as Real,
+          (max[2] + 1) as Real,
         ),
       );
     }
@@ -154,7 +153,7 @@ impl Chunklet {
       (None, None) => {}
       (None, Some(_)) => {
         self.block_count += 1;
-        let p = Vec3::new(x as f32, y as f32, z as f32);
+        let p = Vec3::new(x as Real, y as Real, z as Real);
         self.aabb.take_point(p);
         self.aabb.take_point(p + Vec3::new(1.0, 1.0, 1.0));
       }
@@ -209,7 +208,7 @@ impl Shape for Chunklet {
     todo!()
   }
 
-  fn mass_properties(&self, density: f32) -> MassProperties {
+  fn mass_properties(&self, density: Real) -> MassProperties {
     let lock = COLLIDERS.read().unwrap();
     self
       .blocks
@@ -218,7 +217,7 @@ impl Shape for Chunklet {
       .filter(|x| x.1.is_some())
       .map(|(i, block)| {
         let (x, y, z) = Self::index_decode(i as u16);
-        let pose1 = Pose::translation(x as f32, y as f32, z as f32);
+        let pose1 = Pose::translation(x as Real, y as Real, z as Real);
         let block = block.and_then(|x| lock.get(BlockColliderInfoHandle(x.get())));
         (pose1, block)
       })
@@ -253,14 +252,14 @@ impl Shape for Chunklet {
   }
 
   fn ccd_angular_thickness(&self) -> Real {
-    f32::consts::PI / 8.0
+    core::f32::consts::PI / 8.0
   }
 }
 impl RayCast for Chunklet {
   fn cast_local_ray_and_get_normal(
     &self,
     ray: &Ray,
-    max_time_of_impact: f32,
+    max_time_of_impact: Real,
     solid: bool,
   ) -> Option<RayIntersection> {
     let lock = COLLIDERS.read().unwrap();
@@ -281,7 +280,7 @@ impl RayCast for Chunklet {
         return;
       };
       for aabb in info.boxes.iter() {
-        let center = aabb.center() + Vec3::new(x as f32, y as f32, z as f32);
+        let center = aabb.center() + Vec3::new(x as Real, y as Real, z as Real);
         let cuboid = Cuboid::new(aabb.half_extents());
         let local_ray = Ray::new(ray.origin - center, ray.dir);
         if let Some(hit) =
@@ -301,12 +300,12 @@ impl PointQuery for Chunklet {
     let mut best: Option<(Real, PointProjection)> = None;
     self
       .tree
-      .query_aabb([0.0; 3], [CHUNK_SIDE as f32; 3], |handle, x, y, z| {
+      .query_aabb([0.0; 3], [CHUNK_SIDE as Real; 3], |handle, x, y, z| {
         let Some(info) = lock.get(BlockColliderInfoHandle(handle)) else {
           return;
         };
         for aabb in info.boxes.iter() {
-          let center = aabb.center() + Vec3::new(x as f32, y as f32, z as f32);
+          let center = aabb.center() + Vec3::new(x as Real, y as Real, z as Real);
           let cuboid = Cuboid::new(aabb.half_extents());
           let proj = cuboid.project_local_point(pt - center, solid);
           let projected = PointProjection::new(proj.is_inside, proj.point + center);

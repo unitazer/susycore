@@ -1,3 +1,4 @@
+use rapier3d::dynamics::SoftBodySet;
 use rapier3d::math::Vec3;
 use rapier3d::prelude::{
   ActiveEvents, ColliderBuilder, ColliderHandle, ColliderSet, IslandManager, RigidBodySet,
@@ -34,6 +35,7 @@ impl PackedChunkletCoords {
       | y as u64;
     Some(Self(packed))
   }
+  #[inline(always)]
   pub fn to_xyz(p: u64) -> (i32, u8, i32) {
     let y = p as u8;
     let x = if (p >> 63) & 1 != 0 {
@@ -92,6 +94,7 @@ impl TerrainData {
     colliders: &mut ColliderSet,
     islands: &mut IslandManager,
     bodies: &mut RigidBodySet,
+    softbodies: &mut SoftBodySet,
   ) {
     let Some(handle) = self.collider_for(cx, cy, cz) else {
       log::debug!("no chunk at {cx} {cy} {cz}");
@@ -115,7 +118,7 @@ impl TerrainData {
       self
         .colliders
         .remove(&PackedChunkletCoords::from_xyz(cx, cy, cz));
-      colliders.remove(handle, islands, bodies, true);
+      colliders.remove(handle, islands, bodies, softbodies, true);
     }
   }
   pub fn remove(
@@ -126,12 +129,13 @@ impl TerrainData {
     colliders: &mut ColliderSet,
     islands: &mut IslandManager,
     bodies: &mut RigidBodySet,
+    softbodies: &mut SoftBodySet,
   ) {
     if let Some(handle) = self
       .colliders
       .remove(&PackedChunkletCoords::from_xyz(x, y, z))
     {
-      colliders.remove(handle, islands, bodies, true);
+      colliders.remove(handle, islands, bodies, softbodies, true);
     }
   }
   pub fn put(
@@ -196,6 +200,7 @@ mod tests {
   fn coords_out_of_range_rejected() {
     assert!(PackedChunkletCoords::try_from_xyz(LIMIT + 1, 0, 0).is_none());
     assert!(PackedChunkletCoords::try_from_xyz(0, 0, LIMIT + 1).is_none());
+    assert!(PackedChunkletCoords::try_from_xyz(0, 0, LIMIT).is_some());
     assert!(PackedChunkletCoords::try_from_xyz(0, -1, 0).is_none());
     assert!(PackedChunkletCoords::try_from_xyz(0, 256, 0).is_none());
     assert!(PackedChunkletCoords::try_from_xyz(0, 255, 0).is_some());

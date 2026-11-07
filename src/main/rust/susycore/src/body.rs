@@ -19,7 +19,7 @@ use crate::chunklet::Chunklet;
 use crate::contact_forces::CONTACT_FORCE_EVENT_THRESHOLD;
 use crate::scene::Scene;
 use crate::terrain::{CHUNK_VOLUME, PackedChunkletCoords};
-
+///entity handle for the java side
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EntityId(pub i32);
 
@@ -30,7 +30,7 @@ pub struct BodyEntry {
 
 pub const BLOCK_DENSITY: Real = 1000.0;
 pub const POSE_BUFFER_LEN: usize = 11;
-pub const ANCHOR_COLLIDER_HALF_EXTENT: Real = 0.05;
+pub const ANCHOR_COLLIDER_HALF_EXTENT: Real = 0.0625;
 
 pub struct RayHit {
   pub toi: Real,
@@ -46,7 +46,7 @@ impl Scene {
     rot: Quat,
   ) -> RigidBodyHandle {
     if self.chunklet_bodies.contains_key(&entity) {
-      log::warn!("chunklet body for {} already exists, replacing", entity.0);
+      log::warn!("chunklet body for {:?} already exists, replacing", entity);
       self.remove_chunklet_body(entity);
     }
     let rb = RigidBodyBuilder::dynamic()
@@ -65,7 +65,7 @@ impl Scene {
 
   pub fn create_anchor_body(&mut self, entity: EntityId, pos: Vec3) -> RigidBodyHandle {
     if self.chunklet_bodies.contains_key(&entity) {
-      log::warn!("chunklet body for {} already exists, replacing", entity.0);
+      log::warn!("chunklet body for {:?} already exists, replacing", entity);
       self.remove_chunklet_body(entity);
     }
     let rb = RigidBodyBuilder::fixed()
@@ -195,6 +195,7 @@ impl Scene {
       handle,
       &mut self.world.islands,
       &mut self.world.bodies,
+      &mut self.world.soft_bodies,
       true,
     );
   }
@@ -219,6 +220,7 @@ impl Scene {
       &mut self.world.colliders,
       &mut self.world.impulse_joints,
       &mut self.world.multibody_joints,
+      &mut self.world.soft_bodies,
       true,
     );
     self.prune_joints_of(entity);

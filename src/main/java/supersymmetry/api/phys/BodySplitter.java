@@ -59,7 +59,7 @@ public final class BodySplitter {
         SubWorldPlot plot = body.getPlot();
         if (plot == null || !body.hasColliders()) return;
         LongSet solid = collectSolidLocals(body.getEntityWorld(), plot);
-        List<Component> components = findComponents(solid);
+        List<IntAABB> components = findComponents(solid);
         if (components.size() <= 1) return;
         if (components.size() > MAX_SPLIT_COMPONENTS) {
             SusyLog.logger.warn(
@@ -67,9 +67,9 @@ public final class BodySplitter {
                     body.getEntityId(), components.size(), MAX_SPLIT_COMPONENTS);
             return;
         }
-        components.sort(Comparator.comparingInt((Component component) -> component.blocks.size()).reversed());
+        components.sort(Comparator.comparingInt((IntAABB component) -> component.blocks.size()).reversed());
         for (int i = 1; i < components.size(); i++) {
-            Component component = components.get(i);
+            IntAABB component = components.get(i);
             PhysicsBodyFormation.createChildEntity(body, component.min(), component.max(), component.blocks);
         }
     }
@@ -98,13 +98,13 @@ public final class BodySplitter {
         return solid;
     }
 
-    private static List<Component> findComponents(LongSet solid) {
-        List<Component> components = new ArrayList<>();
+    private static List<IntAABB> findComponents(LongSet solid) {
+        List<IntAABB> components = new ArrayList<>();
         LongOpenHashSet visited = new LongOpenHashSet();
         for (LongIterator it = solid.iterator(); it.hasNext();) {
             long start = it.nextLong();
             if (!visited.add(start)) continue;
-            Component component = new Component();
+            IntAABB component = new IntAABB();
             LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
             queue.enqueue(start);
             while (!queue.isEmpty()) {
@@ -123,7 +123,7 @@ public final class BodySplitter {
         return components;
     }
 
-    private static final class Component {
+    private static final class IntAABB {
 
         private final LongOpenHashSet blocks = new LongOpenHashSet();
         private int minX = Integer.MAX_VALUE;

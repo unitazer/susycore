@@ -62,6 +62,7 @@ impl Scene {
       &mut self.world.colliders,
       &mut self.world.islands,
       &mut self.world.bodies,
+      &mut self.world.soft_bodies,
     );
 
     if c.blocks.iter().all(|b| b.is_none()) {
@@ -299,9 +300,13 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeEntity(
 ) {
   let handle: ColliderHandle = handle.collider_handle();
   Scene::with_scene_mut(world_id as usize, |x| {
-    x.world
-      .colliders
-      .remove(handle, &mut x.world.islands, &mut x.world.bodies, true);
+    x.world.colliders.remove(
+      handle,
+      &mut x.world.islands,
+      &mut x.world.bodies,
+      &mut x.world.soft_bodies,
+      true,
+    );
   });
 }
 

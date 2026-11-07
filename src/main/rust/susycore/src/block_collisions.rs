@@ -4,7 +4,7 @@ use std::sync::RwLock;
 
 use jni::EnvUnowned;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
-use jni::sys::{jdouble, jfloat, jint};
+use jni::sys::{jboolean, jdouble, jfloat, jint};
 use rapier3d::math::Vec3;
 use rapier3d::parry::bounding_volume::{Aabb, BoundingVolume};
 use rapier3d::prelude::{QueryFilter, RigidBodyHandle};
@@ -40,6 +40,10 @@ pub struct MinecraftBlockColliderInfo {
   pub mass: Real,
   pub boxes: Vec<Aabb>,
 }
+pub const BOX: Aabb = Aabb {
+  mins: Vec3::new(0.0, 0.0, 0.0),
+  maxs: Vec3::new(1.0, 1.0, 1.0),
+};
 
 pub struct ColliderStore {
   pub inner: Vec<MinecraftBlockColliderInfo>,
@@ -162,16 +166,20 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
   restitution: jdouble,
   density: jdouble,
   aabbs: JDoubleArray,
+  is_cube: jboolean,
 ) -> jint {
-  let aabbs_data = env
-    .with_env(|env| -> Result<Vec<jdouble>, jni::errors::Error> {
-      let len = aabbs.len(env)?;
-      let mut buffer = vec![0f64; len];
-      aabbs.get_region(env, 0, &mut buffer)?;
-      Ok(buffer)
-    })
-    .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
-
+  let aabbs_data = if is_cube {
+    Vec::default()
+  } else {
+    env
+      .with_env(|env| -> Result<Vec<jdouble>, jni::errors::Error> {
+        let len = aabbs.len(env)?;
+        let mut buffer = vec![0f64; len];
+        aabbs.get_region(env, 0, &mut buffer)?;
+        Ok(buffer)
+      })
+      .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+  };
   //TODO a Vec<f64> can be transmuted into Vec<Aabb> if Real = f64
   debug_assert!(aabbs_data.len().is_multiple_of(6));
   debug_assert!(aabbs_data.capacity().is_multiple_of(6));
@@ -190,7 +198,11 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
   assert!(size_of::<Aabb>() == size_of::<[Real; 6]>());
   let len = boxes.len() / 6;
   let cap = boxes.capacity() / 6;
-  let boxes_cast = unsafe { Vec::from_raw_parts(boxes.as_mut_ptr() as *mut Aabb, len, cap) };
+  let boxes_cast = if is_cube {
+      vec![BOX]
+  } else {
+    unsafe { Vec::from_raw_parts(boxes.as_mut_ptr() as *mut Aabb, len, cap) }
+  };
   #[cfg(debug_assertions)]
   debug_assert!(boxes_cast == boxes_slow);
   mem::forget(boxes); // prevents a double drop
@@ -233,6 +245,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeChunk(
       &mut xs.world.colliders,
       &mut xs.world.islands,
       &mut xs.world.bodies,
+      &mut xs.world.soft_bodies,
     );
   });
 }
@@ -277,6 +290,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
       &mut xs.world.colliders,
       &mut xs.world.islands,
       &mut xs.world.bodies,
+      &mut xs.world.soft_bodies,
     );
 
     let block_world_x = (cx * 16 + x) as f32;
