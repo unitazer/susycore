@@ -40,6 +40,7 @@
   ],
   "client": [
     "PipeRendererMixin",
+    "RenderUtilMixin",
     "WorldSceneRendererMixin"
   ]
 }
