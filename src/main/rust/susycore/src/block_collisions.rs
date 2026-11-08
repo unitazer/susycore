@@ -1,4 +1,3 @@
-use std::mem::{self};
 use std::num::NonZeroU32;
 use std::sync::RwLock;
 
@@ -190,36 +189,21 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
       })
       .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
   };
-  //TODO a Vec<f64> can be transmuted into Vec<Aabb> if Real = f64
-  debug_assert!(aabbs_data.len().is_multiple_of(6));
-  debug_assert!(aabbs_data.capacity().is_multiple_of(6));
-  let mut boxes: Vec<Real> = aabbs_data.into_iter().map(|x| x as Real).collect();
+  debug_assert!(is_cube || aabbs_data.len().is_multiple_of(6));
 
-  #[cfg(debug_assertions)]
-  let boxes_slow: Vec<Aabb> = if is_cube {
-    vec![BOX]
-  } else {
-    boxes
-      .chunks(6)
-      .map(|x| {
-        let from = Vec3::from_slice(&x[0..3]);
-        let to = Vec3::from_slice(&x[3..6]);
-        Aabb::new(from, to)
-      })
-      .collect()
-  };
-
-  assert!(size_of::<Aabb>() == size_of::<[Real; 6]>());
-  let len = boxes.len() / 6;
-  let cap = boxes.capacity() / 6;
   let boxes_cast = if is_cube {
     vec![BOX]
   } else {
-    unsafe { Vec::from_raw_parts(boxes.as_mut_ptr() as *mut Aabb, len, cap) }
+    aabbs_data
+      .chunks_exact(6)
+      .map(|x| {
+        Aabb::new(
+          Vec3::new(x[0] as Real, x[1] as Real, x[2] as Real),
+          Vec3::new(x[3] as Real, x[4] as Real, x[5] as Real),
+        )
+      })
+      .collect()
   };
-  #[cfg(debug_assertions)]
-  debug_assert!(boxes_cast == boxes_slow);
-  mem::forget(boxes); // prevents a double drop
 
   let collider = MinecraftBlockColliderInfo::new(
     friction as Real,
@@ -228,8 +212,14 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
     boxes_cast,
     is_cube,
   );
-  //try_into because if this overflows it will definitely get corrupted and should crash
-  collider.handle().0.try_into().unwrap()
+  let handle = collider.handle().0;
+  match jint::try_from(handle) {
+    Ok(v) => v,
+    Err(_) => {
+      log::error!("collider handle {handle} does not fit in jint");
+      0
+    }
+  }
 }
 
 #[unsafe(no_mangle)]

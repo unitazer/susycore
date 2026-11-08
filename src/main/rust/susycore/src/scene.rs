@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::mem;
 use std::sync::{LazyLock, Mutex};
 
 use jni::EnvUnowned;
@@ -160,7 +159,8 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_getEntityPose(
   env
     .with_env(|env| -> JResult<()> {
       if arr.is_null() {
-        panic!("null cache array");
+        log::warn!("getEntityPose called with null cache array");
+        return Ok(());
       }
       let buf = buf.map(|x| x as f64);
       arr.set_region(env, 0, &buf)?;
@@ -183,25 +183,30 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addEntity(
   _indicies: JIntArray,
 ) -> jlong {
   debug_assert!(world_id >= 0);
-  if !(0..=ShapeType::Custom as i32).contains(&shape_type) {
-    log::warn!("addEntity on invalid shape type {shape_type}");
-    return 0;
-  }
-  //TODO dont do this
-  let shape_type: ShapeType = unsafe { mem::transmute(shape_type as u8) };
+  let shape_type = match shape_type {
+    x if x == ShapeType::Ball as i32 => ShapeType::Ball,
+    x if x == ShapeType::Cuboid as i32 => ShapeType::Cuboid,
+    _ => {
+      log::warn!("addEntity on unsupported shape type {shape_type}");
+      return 0;
+    }
+  };
 
   let data = env
-    .with_env(|env| -> Result<Vec<f32>, jni::errors::Error> {
+    .with_env(|env| -> Result<Option<Vec<f32>>, jni::errors::Error> {
       if data.is_null() {
-        panic!("float array in addEntity is null");
+        log::warn!("addEntity called with null float array");
+        return Ok(None);
       }
       let len = data.len(env)?;
-      let mut v = Vec::with_capacity(len);
-      v.resize(len, 0.0);
+      let mut v = vec![0.0f32; len];
       data.get_region(env, 0, &mut v)?;
-      Ok(v)
+      Ok(Some(v))
     })
     .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
+  let Some(data) = data else {
+    return 0;
+  };
   let shape = match shape_type {
     ShapeType::Ball if !data.is_empty() => SharedShape::ball(data[0]),
     ShapeType::Cuboid if data.len() >= 3 => SharedShape::cuboid(data[0], data[1], data[2]),

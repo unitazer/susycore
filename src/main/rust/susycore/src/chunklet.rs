@@ -214,15 +214,13 @@ impl Shape for Chunklet {
       .blocks
       .iter()
       .enumerate()
-      .filter(|x| x.1.is_some())
-      .map(|(i, block)| {
+      .filter_map(|(i, block)| {
+        let handle = (*block)?;
+        let info = lock.get(BlockColliderInfoHandle(handle.get()))?;
         let (x, y, z) = Self::index_decode(i as u16);
-        let pose1 = Pose::translation(x as Real, y as Real, z as Real);
-        let block = block.and_then(|x| lock.get(BlockColliderInfoHandle(x.get())));
-        (pose1, block)
+        let pose = Pose::translation(x as Real, y as Real, z as Real);
+        Some((pose, info))
       })
-      .filter(|x| x.1.is_some())
-      .map(|x| (x.0, x.1.unwrap()))
       .flat_map(|(pose, block_info)| {
         block_info
           .boxes

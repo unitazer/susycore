@@ -114,35 +114,27 @@ impl PersistentQueryDispatcher<ContactManifoldData, ContactData> for ChunkletDis
     }
     *workspace = Some(ChunkletWorkspace.into());
     if g1.shape_type() == ShapeType::Custom && g2.shape_type() != ShapeType::Custom {
-      manifolds_chunklet_shape(
-        pos12,
-        (g1 as &dyn Any)
-          .downcast_ref()
-          .expect("chunklet expected to be the only custom type"),
-        g2,
-        prediction,
-        manifolds,
-        false,
-      );
+      let Some(chunklet) = (g1 as &dyn Any).downcast_ref::<Chunklet>() else {
+        log::warn!("custom shape is not a Chunklet");
+        return Err(Unsupported);
+      };
+      manifolds_chunklet_shape(pos12, chunklet, g2, prediction, manifolds, false);
     } else if g1.shape_type() != ShapeType::Custom && g2.shape_type() == ShapeType::Custom {
-      manifolds_chunklet_shape(
-        &pos12.inverse(),
-        (g2 as &dyn Any)
-          .downcast_ref()
-          .expect("chunklet expected to be the only custom type"),
-        g1,
-        prediction,
-        manifolds,
-        true,
-      );
+      let Some(chunklet) = (g2 as &dyn Any).downcast_ref::<Chunklet>() else {
+        log::warn!("custom shape is not a Chunklet");
+        return Err(Unsupported);
+      };
+      manifolds_chunklet_shape(&pos12.inverse(), chunklet, g1, prediction, manifolds, true);
     } else {
-      let g1 = (g1 as &dyn Any)
-        .downcast_ref()
-        .expect("chunklet expected to be the only custom type");
-      let g2 = (g2 as &dyn Any)
-        .downcast_ref()
-        .expect("chunklet expected to be the only custom type");
-      manifolds_chunklet_chunklet(pos12, g1, g2, prediction, manifolds);
+      let Some(chunklet1) = (g1 as &dyn Any).downcast_ref::<Chunklet>() else {
+        log::warn!("custom shape is not a Chunklet");
+        return Err(Unsupported);
+      };
+      let Some(chunklet2) = (g2 as &dyn Any).downcast_ref::<Chunklet>() else {
+        log::warn!("custom shape is not a Chunklet");
+        return Err(Unsupported);
+      };
+      manifolds_chunklet_chunklet(pos12, chunklet1, chunklet2, prediction, manifolds);
     }
     Ok(())
   }

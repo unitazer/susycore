@@ -1,6 +1,5 @@
 use crate::block_collisions::{BlockColliderInfoHandle, MinecraftBlockColliderInfo};
 use crate::body::BLOCK_DENSITY;
-use crate::terrain::CHUNK_VOLUME;
 use rapier3d::math::Vec3;
 use rapier3d::parry::bounding_volume::Aabb;
 
