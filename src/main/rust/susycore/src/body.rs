@@ -3,25 +3,20 @@ use std::collections::HashMap;
 use jni::EnvUnowned;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
-use jni::sys::{jboolean, jdouble, jint, jlong};
+use jni::sys::{jdouble, jint};
 use rapier3d::dynamics::RigidBodyHandle;
 use rapier3d::glamx::Quat;
 use rapier3d::math::{Pose, Vec3};
-use rapier3d::parry::query::Ray;
 use rapier3d::prelude::{
-  ActiveEvents, ColliderBuilder, ColliderHandle, Group, InteractionGroups, InteractionTestMode,
-  QueryFilter, RigidBodyBuilder, SharedShape,
+  ActiveEvents, ColliderBuilder, ColliderHandle, Group, InteractionGroups, InteractionTestMode, RigidBodyBuilder, SharedShape,
 };
 
-use crate::Real;
 use crate::block_collisions::{AIR_HANDLE, BlockColliderInfoHandle};
 use crate::chunklet::Chunklet;
 use crate::contact_forces::CONTACT_FORCE_EVENT_THRESHOLD;
 use crate::scene::Scene;
 use crate::terrain::{CHUNK_VOLUME, PackedChunkletCoords};
-///entity handle for the java side
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct EntityId(pub i32);
+use crate::{EntityId, Real};
 
 pub struct BodyEntry {
   pub rb: RigidBodyHandle,
@@ -31,12 +26,6 @@ pub struct BodyEntry {
 pub const BLOCK_DENSITY: Real = 1000.0;
 pub const POSE_BUFFER_LEN: usize = 11;
 pub const ANCHOR_COLLIDER_HALF_EXTENT: Real = 0.0625;
-
-pub struct RayHit {
-  pub toi: Real,
-  pub normal: Vec3,
-  pub owner: Option<EntityId>,
-}
 
 impl Scene {
   pub fn create_chunklet_body(
@@ -276,34 +265,7 @@ impl Scene {
   pub(crate) fn rb_of(&self, entity: EntityId) -> Option<RigidBodyHandle> {
     self.chunklet_bodies.get(&entity).map(|e| e.rb)
   }
-
-  pub fn cast_ray(
-    &self,
-    origin: Vec3,
-    dir: Vec3,
-    max_toi: Real,
-    solid: bool,
-  ) -> Option<(ColliderHandle, RayHit)> {
-    let pipeline = self.world.broad_phase.as_query_pipeline(
-      self.world.narrow_phase.query_dispatcher(),
-      &self.world.bodies,
-      &self.world.colliders,
-      QueryFilter::default(),
-    );
-    let (handle, hit) = pipeline.cast_ray_and_get_normal(&Ray::new(origin, dir), max_toi, solid)?;
-    let owner = self.collider_owners.get(&handle).copied();
-    Some((
-      handle,
-      RayHit {
-        toi: hit.time_of_impact,
-        normal: hit.normal,
-        owner,
-      },
-    ))
-  }
 }
-
-const NO_HIT: jlong = -1;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_createChunkletBody(
@@ -558,58 +520,12 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_applyImpulseAtPoint(
   });
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_supersymmetry_api_phys_Rapier_castRay(
-  mut env: EnvUnowned,
-  _class: JClass,
-  world_id: jint,
-  ox: jdouble,
-  oy: jdouble,
-  oz: jdouble,
-  dx: jdouble,
-  dy: jdouble,
-  dz: jdouble,
-  max_toi: jdouble,
-  solid: jboolean,
-  out_arr: JDoubleArray,
-) -> jlong {
-  debug_assert!(world_id >= 0);
-  let hit = Scene::with_scene(world_id as usize, |scene| {
-    scene.cast_ray(
-      Vec3::new(ox as Real, oy as Real, oz as Real),
-      Vec3::new(dx as Real, dy as Real, dz as Real),
-      max_toi as Real,
-      solid,
-    )
-  })
-  .flatten();
-  let mut out = [0.0; 5];
-  let handle = match hit {
-    Some((handle, hit)) => {
-      out[0] = hit.toi as f64;
-      out[1] = hit.normal.x as f64;
-      out[2] = hit.normal.y as f64;
-      out[3] = hit.normal.z as f64;
-      out[4] = hit.owner.map(|e| e.0 as f64).unwrap_or(-1.0);
-      crate::jlong_handle(handle)
-    }
-    None => NO_HIT,
-  };
-  env
-    .with_env(|env| -> Result<(), jni::errors::Error> {
-      out_arr.set_region(env, 0, &out)?;
-      Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-  handle
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::dispatcher::ChunkletDispatcher;
   use crate::joint::{Axis, JointSpec, MotorSpec};
-  use crate::test_util::{collider_handle_for_box, full_chunklet_data};
+  use crate::test_util::collider_handle_for_box;
   use rapier3d::parry::query::PersistentQueryDispatcher;
   use rapier3d::prelude::{ContactManifold, PointQuery, RayCast};
 
@@ -679,7 +595,7 @@ mod tests {
     let h = collider_handle_for_box([0.0; 3], [1.0; 3]);
     let key = PackedChunkletCoords::from_xyz(0, 0, 0);
     let col = s
-      .add_body_chunk(EntityId(7), key, Vec3::ZERO, full_chunklet_data(h))
+      .add_body_chunk(EntityId(7), key, Vec3::ZERO, [h; CHUNK_VOLUME])
       .expect("collider");
     assert_eq!(s.collider_owners.get(&col), Some(&EntityId(7)));
     s.remove_chunklet_body(EntityId(7));
@@ -694,7 +610,7 @@ mod tests {
     let h = collider_handle_for_box([0.0; 3], [1.0; 3]);
     let key = PackedChunkletCoords::from_xyz(1, 2, 3);
     let col = s
-      .add_body_chunk(EntityId(7), key, Vec3::ZERO, full_chunklet_data(h))
+      .add_body_chunk(EntityId(7), key, Vec3::ZERO, [h; CHUNK_VOLUME])
       .unwrap();
     assert!(
       s.add_body_chunk(EntityId(7), key, Vec3::ZERO, [AIR_HANDLE; CHUNK_VOLUME])
@@ -768,7 +684,7 @@ mod tests {
       EntityId(3),
       PackedChunkletCoords::from_xyz(0, 0, 0),
       Vec3::ZERO,
-      full_chunklet_data(h),
+      [h; CHUNK_VOLUME],
     );
     let mut out = [0.0; POSE_BUFFER_LEN];
     s.body_pose_into(EntityId(3), &mut out);
@@ -784,7 +700,7 @@ mod tests {
       EntityId(3),
       PackedChunkletCoords::from_xyz(0, 0, 0),
       Vec3::ZERO,
-      full_chunklet_data(h),
+      [h; CHUNK_VOLUME],
     );
     let mass = {
       let rb = s.chunklet_bodies.get(&EntityId(3)).unwrap().rb;
@@ -805,18 +721,13 @@ mod tests {
   fn cast_ray_hits_terrain_and_body() {
     let mut s = Scene::new(Vec3::ZERO);
     let h = collider_handle_for_box([0.0; 3], [1.0; 3]);
-    s.add_chunklet(
-      0,
-      0,
-      0,
-      Chunklet::new_with_blockhandle(full_chunklet_data(h)),
-    );
+    s.add_chunklet(0, 0, 0, Chunklet::new_with_blockhandle([h; CHUNK_VOLUME]));
     s.create_chunklet_body(EntityId(5), Vec3::new(100.0, 0.0, 0.0), Quat::IDENTITY);
     s.add_body_chunk(
       EntityId(5),
       PackedChunkletCoords::from_xyz(0, 0, 0),
       Vec3::new(0.0, 0.0, 0.0),
-      full_chunklet_data(h),
+      [h; CHUNK_VOLUME],
     );
     s.world.step();
 
@@ -866,18 +777,13 @@ mod tests {
   fn body_comes_to_rest_on_terrain() {
     let mut s = Scene::new(Vec3::new(0.0, -10.0, 0.0));
     let h = collider_handle_for_box([0.0; 3], [1.0; 3]);
-    s.add_chunklet(
-      0,
-      0,
-      0,
-      Chunklet::new_with_blockhandle(full_chunklet_data(h)),
-    );
+    s.add_chunklet(0, 0, 0, Chunklet::new_with_blockhandle([h; CHUNK_VOLUME]));
     s.create_chunklet_body(EntityId(9), Vec3::new(0.0, 20.0, 0.0), Quat::IDENTITY);
     s.add_body_chunk(
       EntityId(9),
       PackedChunkletCoords::from_xyz(0, 0, 0),
       Vec3::ZERO,
-      full_chunklet_data(h),
+      [h; CHUNK_VOLUME],
     );
     s.world.step();
     for _ in 0..120 {
@@ -982,7 +888,7 @@ mod tests {
   #[test]
   fn chunklet_chunklet_manifolds() {
     let h = collider_handle_for_box([0.0; 3], [1.0; 3]);
-    let a = Chunklet::new_with_blockhandle(full_chunklet_data(h));
+    let a = Chunklet::new_with_blockhandle([h; CHUNK_VOLUME]);
     let mut data = [AIR_HANDLE; CHUNK_VOLUME];
     data[Chunklet::index(0, 0, 0) as usize] = h;
     data[Chunklet::index(0, 0, 1) as usize] = h;

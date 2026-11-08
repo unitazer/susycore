@@ -10,9 +10,7 @@ pub mod rendering;
 pub mod scene;
 pub mod terrain;
 
-#[cfg(test)]
-mod turret_bench;
-
+pub mod raycast;
 #[cfg(test)]
 pub(crate) mod test_util;
 
@@ -69,6 +67,9 @@ mod glsmit {
     });
   }
 }
+///physics entity handle for the java side
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EntityId(pub i32);
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_common_Native_goog(_env: EnvUnowned, _class: JClass) {

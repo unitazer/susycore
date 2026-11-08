@@ -11,7 +11,7 @@ use rapier3d::prelude::{
   ColliderHandle, ColliderSet, CollisionEvent, EventHandler, Real, RigidBodySet,
 };
 
-use crate::body::EntityId;
+use crate::EntityId;
 use crate::scene::Scene;
 
 pub const CONTACT_FORCE_EVENT_THRESHOLD: Real = 1.0e5;
@@ -115,9 +115,13 @@ impl EventHandler for ForceEventCollector<'_> {
     });
   }
 
-fn handle_soft_body_tear_event(&self, soft_bodies: &rapier3d::prelude::SoftBodySet, event: &rapier3d::prelude::SoftBodyTearEvent) {
-        todo!()
-    }
+  fn handle_soft_body_tear_event(
+    &self,
+    _soft_bodies: &rapier3d::prelude::SoftBodySet,
+    _event: &rapier3d::prelude::SoftBodyTearEvent,
+  ) {
+    todo!()
+  }
 }
 
 impl Scene {

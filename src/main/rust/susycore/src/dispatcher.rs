@@ -5,7 +5,9 @@ use rapier3d::math::Vec3;
 use rapier3d::parry::bounding_volume::Aabb;
 use rapier3d::parry::query::details::NormalConstraints;
 use rapier3d::parry::query::{
-  ClosestPoints, Contact, ContactManifold, ContactManifoldsWorkspace, DefaultQueryDispatcher, NonlinearRigidMotion, PersistentQueryDispatcher, QueryDispatcher, ShapeCastHit, ShapeCastOptions, ShapeDistance, ShapeIntersection, TypedWorkspaceData, Unsupported, WorkspaceData,
+  ClosestPoints, Contact, ContactManifold, ContactManifoldsWorkspace, DefaultQueryDispatcher,
+  NonlinearRigidMotion, PersistentQueryDispatcher, QueryDispatcher, ShapeCastHit, ShapeCastOptions,
+  ShapeDistance, ShapeIntersection, TypedWorkspaceData, Unsupported, WorkspaceData,
 };
 use rapier3d::prelude::{ContactData, ContactManifoldData, Cuboid, Pose, Shape, ShapeType};
 
@@ -37,7 +39,12 @@ impl QueryDispatcher for ChunkletDispatcher {
     Err(Unsupported)
   }
 
-  fn distance(&self, _pos12: &Pose, g1: &dyn Shape, g2: &dyn Shape) -> Result<ShapeDistance, Unsupported> {
+  fn distance(
+    &self,
+    _pos12: &Pose,
+    g1: &dyn Shape,
+    g2: &dyn Shape,
+  ) -> Result<ShapeDistance, Unsupported> {
     trace!("distance {:?} <-> {:?}", g1.shape_type(), g2.shape_type());
     Err(Unsupported)
   }

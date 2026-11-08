@@ -10,13 +10,13 @@ use rapier3d::math::Vec3;
 use rapier3d::parry::query::{DefaultQueryDispatcher, QueryDispatcher};
 use rapier3d::prelude::*;
 
-use crate::body::{BodyEntry, EntityId};
+use crate::body::{BodyEntry};
 use crate::chunklet::Chunklet;
 use crate::contact_forces::ContactForceRecord;
 use crate::dispatcher::ChunkletDispatcher;
 use crate::joint::{JointId, JointRecord};
 use crate::terrain::TerrainData;
-use crate::{IHateJava, JResult};
+use crate::{EntityId, IHateJava, JResult};
 
 use rapier3d::na::{Isometry3, Quaternion, Translation3, UnitQuaternion};
 //dimension specific information, root structure for the physics simulation

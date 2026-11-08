@@ -10,12 +10,7 @@ pub(crate) fn collider_handle_for_box(min: [f32; 3], max: [f32; 3]) -> BlockColl
     BLOCK_DENSITY,
     0.0,
     vec![Aabb::new(Vec3::from_slice(&min), Vec3::from_slice(&max))],
+    false,
   )
   .handle()
-}
-
-pub(crate) fn full_chunklet_data(
-  handle: BlockColliderInfoHandle,
-) -> [BlockColliderInfoHandle; CHUNK_VOLUME] {
-  [handle; CHUNK_VOLUME]
 }

@@ -16,12 +16,12 @@ use crate::terrain::PackedChunkletCoords;
 //TODO callbacks
 
 pub static COLLIDERS: RwLock<ColliderStore> = RwLock::new(ColliderStore::new());
+pub const AIR_HANDLE: BlockColliderInfoHandle = BlockColliderInfoHandle(0);
 
 pub fn clear_caches() {
   COLLIDERS.write().unwrap().inner.clear();
 }
 
-pub const AIR_HANDLE: BlockColliderInfoHandle = BlockColliderInfoHandle(0);
 #[derive(Eq, PartialOrd, Ord, PartialEq, Hash, Copy, Clone)]
 pub struct BlockColliderInfoHandle(pub(crate) u32);
 
@@ -32,14 +32,6 @@ impl BlockColliderInfoHandle {
   }
 }
 
-#[derive(PartialEq, Clone, Debug)]
-pub struct MinecraftBlockColliderInfo {
-  pub friction: Real,
-  pub restitution: Real,
-  pub density: Real,
-  pub mass: Real,
-  pub boxes: Vec<Aabb>,
-}
 pub const BOX: Aabb = Aabb {
   mins: Vec3::new(0.0, 0.0, 0.0),
   maxs: Vec3::new(1.0, 1.0, 1.0),
@@ -78,9 +70,26 @@ impl ColliderStore {
     out
   }
 }
+#[derive(PartialEq, Clone, Debug)]
+pub struct MinecraftBlockColliderInfo {
+  pub friction: Real,
+  pub restitution: Real,
+  pub density: Real,
+  pub mass: Real,
+  pub boxes: Vec<Aabb>,
+  //TODO this is for a future test, rapier Voxels + Compound([Cuboid]) might be more efficient for
+  //collisions in general
+  pub is_cube: bool,
+}
 
 impl MinecraftBlockColliderInfo {
-  pub fn new(friction: Real, density: Real, restitution: Real, boxes: Vec<Aabb>) -> Self {
+  pub fn new(
+    friction: Real,
+    density: Real,
+    restitution: Real,
+    boxes: Vec<Aabb>,
+    is_box: bool,
+  ) -> Self {
     debug_assert!(!boxes.is_empty());
     Self {
       friction,
@@ -88,6 +97,7 @@ impl MinecraftBlockColliderInfo {
       restitution,
       mass: boxes.iter().map(|x| x.volume()).sum(),
       boxes,
+      is_cube: is_box,
     }
   }
   pub fn handle(self) -> BlockColliderInfoHandle {
@@ -186,20 +196,24 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
   let mut boxes: Vec<Real> = aabbs_data.into_iter().map(|x| x as Real).collect();
 
   #[cfg(debug_assertions)]
-  let boxes_slow: Vec<Aabb> = boxes
-    .chunks(6)
-    .map(|x| {
-      let from = Vec3::from_slice(&x[0..3]);
-      let to = Vec3::from_slice(&x[3..6]);
-      Aabb::new(from, to)
-    })
-    .collect();
+  let boxes_slow: Vec<Aabb> = if is_cube {
+    vec![BOX]
+  } else {
+    boxes
+      .chunks(6)
+      .map(|x| {
+        let from = Vec3::from_slice(&x[0..3]);
+        let to = Vec3::from_slice(&x[3..6]);
+        Aabb::new(from, to)
+      })
+      .collect()
+  };
 
   assert!(size_of::<Aabb>() == size_of::<[Real; 6]>());
   let len = boxes.len() / 6;
   let cap = boxes.capacity() / 6;
   let boxes_cast = if is_cube {
-      vec![BOX]
+    vec![BOX]
   } else {
     unsafe { Vec::from_raw_parts(boxes.as_mut_ptr() as *mut Aabb, len, cap) }
   };
@@ -212,6 +226,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addColliderInfo(
     density as Real,
     restitution as Real,
     boxes_cast,
+    is_cube,
   );
   //try_into because if this overflows it will definitely get corrupted and should crash
   collider.handle().0.try_into().unwrap()

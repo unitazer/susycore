@@ -9,8 +9,7 @@ use rapier3d::prelude::{
   RigidBodyHandle,
 };
 
-use crate::Real;
-use crate::body::EntityId;
+use crate::{EntityId, Real};
 use crate::scene::Scene;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -489,7 +488,7 @@ mod tests {
   use crate::block_collisions::{AIR_HANDLE, BlockColliderInfoHandle};
   use crate::chunklet::Chunklet;
   use crate::terrain::{CHUNK_VOLUME, PackedChunkletCoords};
-  use crate::test_util::{collider_handle_for_box, full_chunklet_data};
+  use crate::test_util::collider_handle_for_box;
 
   fn solid_handle() -> BlockColliderInfoHandle {
     collider_handle_for_box([0.0; 3], [1.0; 3])
@@ -507,7 +506,10 @@ mod tests {
       entity,
       PackedChunkletCoords::from_xyz(0, 0, 0),
       Vec3::ZERO,
-      full_chunklet_data(solid_handle()),
+      {
+        let handle = solid_handle();
+        [handle; CHUNK_VOLUME]
+      },
     );
   }
 
@@ -583,7 +585,10 @@ mod tests {
       0,
       0,
       0,
-      Chunklet::new_with_blockhandle(full_chunklet_data(solid_handle())),
+      Chunklet::new_with_blockhandle({
+        let handle = solid_handle();
+        [handle; CHUNK_VOLUME]
+      }),
     );
     add_solid_body(&mut s, EntityId(1), Vec3::new(0.0, 16.0, 0.0));
     add_solid_body(&mut s, EntityId(2), Vec3::new(0.0, 32.0, 0.0));
