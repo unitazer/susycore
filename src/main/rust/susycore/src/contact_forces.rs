@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use jni::EnvUnowned;
 use jni::errors::ThrowRuntimeExAndDefault;
@@ -43,11 +44,11 @@ impl<'a> ForceEventCollector<'a> {
   }
 
   fn tag_of(&self, colliders: &ColliderSet, handle: ColliderHandle) -> Option<jint> {
-    if let Some(owner) = self.collider_owners.get(&handle) {
-      return Some(owner.0);
-    }
     let collider = colliders.get(handle)?;
-    collider.parent().is_none().then_some(TERRAIN_TAG)
+    if collider.parent().is_some() {
+      return self.collider_owners.get(&handle).copied().map(|o| o.0);
+    }
+    Some(TERRAIN_TAG)
   }
 
   pub fn take(self) -> Vec<ContactForceRecord> {
@@ -126,14 +127,29 @@ impl EventHandler for ForceEventCollector<'_> {
 
 impl Scene {
   pub fn step(&mut self) {
+    let t0 = Instant::now();
     let collector = ForceEventCollector::new(&self.collider_owners);
     self.world.step_with_events(&(), &collector);
+    let step_ms = t0.elapsed().as_secs_f64() * 1e3;
+    let drain_t = Instant::now();
     self.pending_contact_forces.extend(collector.take());
     let len = self.pending_contact_forces.len();
     if len > MAX_PENDING_CONTACT_FORCES {
       let excess = len - MAX_PENDING_CONTACT_FORCES;
       log::warn!("dropping {excess} undrained contact force events");
       self.pending_contact_forces.drain(0..excess);
+    }
+    let drain_ms = drain_t.elapsed().as_secs_f64() * 1e3;
+    if step_ms + drain_ms > 10.0 {
+      log::warn!(
+        "rust phys step detail: sim={:.3}ms drain={:.3}ms bodies={} colliders={} chunk_bodies={} terrain_chunks={}",
+        step_ms,
+        drain_ms,
+        self.world.bodies.len(),
+        self.world.colliders.len(),
+        self.chunklet_bodies.len(),
+        self.terrain.chunks.len(),
+      );
     }
   }
 

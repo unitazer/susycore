@@ -342,8 +342,17 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
     }
 
     private void ensurePhysicsBody() {
-        if (world.isRemote || bodyCreated || plot == null || !Native.ENABLED) return;
+        if (world.isRemote || plot == null || !Native.ENABLED) return;
         if (Rapier.worldId(world) < 0) return;
+        if (bodyCreated) {
+            if (syncedSubchunks.isEmpty() && !isPlotContentEmpty()) {
+                for (Chunk chunk : plot.getLoadedChunks().values()) {
+                    syncChunkToBody(chunk);
+                }
+                refreshContentBounds();
+            }
+            return;
+        }
         if (plot.getSizeChunksX() >= MAX_BODY_CHUNKS || plot.getSizeChunksZ() >= MAX_BODY_CHUNKS) {
             SusyLog.logger.error("plot {} too large for a physics body ({} x {} chunks)",
                     plot, plot.getSizeChunksX(), plot.getSizeChunksZ());

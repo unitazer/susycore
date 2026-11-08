@@ -6,13 +6,11 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JDoubleArray, JFloatArray, JIntArray};
 use jni::sys::{jdouble, jint, jlong};
 use rapier3d::math::Vec3;
-use rapier3d::parry::query::{DefaultQueryDispatcher, QueryDispatcher};
 use rapier3d::prelude::*;
 
-use crate::body::{BodyEntry};
+use crate::body::BodyEntry;
 use crate::chunklet::Chunklet;
 use crate::contact_forces::ContactForceRecord;
-use crate::dispatcher::ChunkletDispatcher;
 use crate::joint::{JointId, JointRecord};
 use crate::terrain::TerrainData;
 use crate::{EntityId, IHateJava, JResult};
@@ -54,21 +52,29 @@ impl Scene {
     v.get_mut(i).map(f)
   }
   pub fn add_chunklet(&mut self, x: i32, y: u8, z: i32, c: Chunklet) {
-    self.terrain.remove(
+    if c.count() == 0 {
+      log::error!("empty chunklet supplied, shouldve been filtered out");
+      self.terrain.remove(
+        x,
+        y,
+        z,
+        &mut self.world.colliders,
+        &mut self.world.islands,
+        &mut self.world.bodies,
+        &mut self.world.soft_bodies,
+      );
+      return;
+    }
+    self.terrain.put(
       x,
       y,
       z,
+      c,
       &mut self.world.colliders,
       &mut self.world.islands,
       &mut self.world.bodies,
       &mut self.world.soft_bodies,
     );
-
-    if c.blocks.iter().all(|b| b.is_none()) {
-      log::error!("empty chunklet supplied, shouldve been filtered out");
-      return;
-    }
-    self.terrain.put(x, y, z, c, &mut self.world.colliders);
   }
 
   pub fn initialize_scene(dim: usize, gravity: Vec3) {
@@ -101,17 +107,15 @@ impl Scene {
         dt: 1. / 20.,
         min_ccd_dt: 1. / 100.,
         normalized_allowed_linear_error: 0.0025,
-        normalized_max_corrective_velocity: 50.0,
-        normalized_prediction_distance: 0.005,
+        normalized_max_corrective_velocity: 2.0,
+        normalized_prediction_distance: 0.01,
         num_solver_iterations: 5,
         max_ccd_substeps: 5,
         friction_model: FrictionModel::Simplified,
         contact_clustering: false,
         ..Default::default()
       },
-      narrow_phase: NarrowPhase::with_query_dispatcher(
-        ChunkletDispatcher.chain(DefaultQueryDispatcher),
-      ),
+      narrow_phase: NarrowPhase::default(),
       ..Default::default()
     };
     let terrain = TerrainData::new();

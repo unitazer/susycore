@@ -5,11 +5,8 @@ mod imp {
   use std::sync::{LazyLock, Mutex};
 
   use color::{AlphaColor, Hsl, Srgb};
-  use rapier3d::{
-    math::Vec3,
-    pipeline::{
-      DebugRenderBackend, DebugRenderMode, DebugRenderObject, DebugRenderPipeline, DebugRenderStyle,
-    },
+  use rapier3d::pipeline::{
+    DebugRenderBackend, DebugRenderMode, DebugRenderObject, DebugRenderPipeline, DebugRenderStyle,
   };
 
   use crate::{gl, glsmit::ensure_gl_loaded};
@@ -34,7 +31,7 @@ mod imp {
 
     Scene::with_scenes(|scenes| {
       for scene in scenes.iter() {
-        backend.stuff.clear();
+        backend.clear();
         scene.world.debug_render(&mut pipeline, &mut *backend);
         backend.render();
       }
@@ -42,7 +39,6 @@ mod imp {
   }
 
   struct GlBackend {
-    pub stuff: Vec<(Vec3, Vec3, [f32; 4])>,
     vertices: Vec<f32>,
     colors: Vec<f32>,
     vbo_vert: GLuint,
@@ -53,34 +49,22 @@ mod imp {
   impl GlBackend {
     fn new() -> Self {
       Self {
-        stuff: Vec::new(),
-        vertices: Vec::new(),
-        colors: Vec::new(),
+        vertices: Vec::with_capacity(1 << 16),
+        colors: Vec::with_capacity(1 << 16),
         vbo_vert: 0,
         vbo_col: 0,
         ready: false,
       }
     }
 
-    fn render(&mut self) {
-      if self.stuff.is_empty() {
-        return;
-      }
+    fn clear(&mut self) {
       self.vertices.clear();
       self.colors.clear();
-      for (from, to, color) in &self.stuff {
-        self
-          .vertices
-          .extend([from.x, from.y, from.z, to.x, to.y, to.z]);
-        let mut hsla = *color;
-        hsla[1] *= 255.0;
-        hsla[2] *= 255.0;
-        let hsl: AlphaColor<Hsl> = AlphaColor::new(hsla);
-        let rgb: AlphaColor<Srgb> = hsl.convert();
-        let rgba = rgb.components;
-        self.colors.extend([
-          rgba[0], rgba[1], rgba[2], rgba[3], rgba[0], rgba[1], rgba[2], rgba[3],
-        ]);
+    }
+
+    fn render(&mut self) {
+      if self.vertices.is_empty() {
+        return;
       }
       unsafe {
         if !self.ready {
@@ -132,6 +116,13 @@ mod imp {
   }
 
   impl DebugRenderBackend for GlBackend {
+    fn filter_object(&self, object: DebugRenderObject) -> bool {
+      match object {
+        // DebugRenderObject::Collider(_, co) => co.parent().is_some(),
+        _ => true,
+      }
+    }
+
     fn draw_line(
       &mut self,
       _object: DebugRenderObject,
@@ -139,7 +130,14 @@ mod imp {
       to: rapier3d::prelude::Vector,
       color: rapier3d::prelude::DebugColor,
     ) {
-      self.stuff.push((from, to, color));
+      self.vertices.extend([from.x, from.y, from.z, to.x, to.y, to.z]);
+      let mut hsla = color;
+      hsla[1] *= 255.0;
+      hsla[2] *= 255.0;
+      let hsl: AlphaColor<Hsl> = AlphaColor::new(hsla);
+      let rgb: AlphaColor<Srgb> = hsl.convert();
+      let rgba = rgb.components;
+      self.colors.extend([rgba[0], rgba[1], rgba[2], rgba[3], rgba[0], rgba[1], rgba[2], rgba[3]]);
     }
   }
 }

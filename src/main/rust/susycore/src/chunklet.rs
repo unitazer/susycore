@@ -1,328 +1,242 @@
-use rapier3d::math::{Pose, Vec3};
-use rapier3d::parry::bounding_volume::{Aabb, BoundingSphere};
-use rapier3d::parry::query::{PointProjection, Ray, RayIntersection};
-use rapier3d::parry::shape::Cuboid;
-use rapier3d::prelude::{
-  FeatureId, MassProperties, PointQuery, RayCast, Shape, ShapeType, TypedShape,
-};
+use rapier3d::math::{IVector, Pose, Real, Vector};
+use rapier3d::parry::shape::{Cuboid, Voxels};
+use rapier3d::prelude::SharedShape;
 use std::num::NonZeroU32;
 
-use crate::Real;
-use crate::block_collisions::{BlockColliderInfoHandle, COLLIDERS};
-use crate::octree::Octree;
-use crate::terrain::{CHUNK_SIDE, CHUNK_SIDE_LOG2, CHUNK_VOLUME};
+use crate::block_collisions::{BlockColliderInfoHandle, COLLIDERS, ColliderStore};
+use crate::terrain::CHUNK_VOLUME;
 
-//Option<NonZeroU32> is 32 bits
 type BlockHandle = Option<NonZeroU32>;
-//16x16x16 block grid
-#[derive(Clone)]
+
 pub struct Chunklet {
   pub blocks: [BlockHandle; CHUNK_VOLUME],
-  pub aabb: Aabb,
-  pub tree: Octree,
   block_count: u32,
+  pub(crate) cube_count: u32,
+  pub(crate) voxels: Option<Voxels>,
+  cube_bits: Box<[u64; 64]>,
+  non_cube: Box<[Option<Vec<(Pose, SharedShape)>>; CHUNK_VOLUME]>,
+  dirty: bool,
+  composed: Option<SharedShape>,
 }
+
+impl Clone for Chunklet {
+  fn clone(&self) -> Self {
+    Self {
+      blocks: self.blocks,
+      block_count: self.block_count,
+      cube_count: self.cube_count,
+      voxels: self.voxels.clone(),
+      cube_bits: self.cube_bits.clone(),
+      non_cube: self.non_cube.clone(),
+      dirty: self.dirty,
+      composed: self.composed.clone(),
+    }
+  }
+}
+
+pub struct SetOutcome {
+  pub changed: bool,
+  pub emptied: bool,
+}
+
 impl Chunklet {
   pub fn new_with_blockhandle(blocks: [BlockColliderInfoHandle; CHUNK_VOLUME]) -> Self {
     Self::new(blocks.map(BlockColliderInfoHandle::into_block))
   }
+
   pub fn new(blocks: [BlockHandle; CHUNK_VOLUME]) -> Self {
-    debug_assert!(!blocks.iter().all(|x| x.is_none()));
-    let mut min = [u8::MAX, u8::MAX, u8::MAX];
-    let mut max = [u8::MIN, u8::MIN, u8::MIN];
-    let mut tree = Octree::new(CHUNK_SIDE_LOG2 as u32);
-    let mut block_count = 0u32;
-
-    for x in 0..CHUNK_SIDE as u8 {
-      for y in 0..CHUNK_SIDE as u8 {
-        for z in 0..CHUNK_SIDE as u8 {
-          let i = Self::index(x, y, z) as usize;
-          if let Some(handle) = blocks[i] {
-            block_count += 1;
-            min[0] = min[0].min(x);
-            min[1] = min[1].min(y);
-            min[2] = min[2].min(z);
-            max[0] = max[0].max(x);
-            max[1] = max[1].max(y);
-            max[2] = max[2].max(z);
-
-            // depth 4
-            let octant = usize::from(x & 8 != 0)
-              | (usize::from(y & 8 != 0) << 1)
-              | (usize::from(z & 8 != 0) << 2);
-            let mut node = tree.root_index();
-            if tree.is_empty(node) {
-              tree.initialize_branch(node);
-            }
-            node = tree.child_index(node, octant);
-
-            // depth 3
-            let octant = usize::from(x & 4 != 0)
-              | (usize::from(y & 4 != 0) << 1)
-              | (usize::from(z & 4 != 0) << 2);
-            if tree.is_empty(node) {
-              tree.initialize_branch(node);
-            }
-            node = tree.child_index(node, octant);
-
-            // depth 2
-            let octant = usize::from(x & 2 != 0)
-              | (usize::from(y & 2 != 0) << 1)
-              | (usize::from(z & 2 != 0) << 2);
-            if tree.is_empty(node) {
-              tree.initialize_branch(node);
-            }
-            node = tree.child_index(node, octant);
-
-            // depth 1 (leaf)
-            let octant = usize::from(x & 1 != 0)
-              | (usize::from(y & 1 != 0) << 1)
-              | (usize::from(z & 1 != 0) << 2);
-            if tree.is_empty(node) {
-              tree.initialize_branch(node);
-            }
-            tree.set_leaf(tree.child_index(node, octant), handle.get());
-          }
-        }
+    let mut c = Self {
+      blocks,
+      block_count: 0,
+      cube_count: 0,
+      voxels: None,
+      cube_bits: Box::new([0u64; 64]),
+      non_cube: Box::new(std::array::from_fn(|_| None)),
+      dirty: false,
+      composed: None,
+    };
+    let colliders = &*COLLIDERS.read().unwrap();
+    for i in 0..CHUNK_VOLUME {
+      let Some(handle) = blocks[i] else { continue };
+      c.block_count += 1;
+      let Some(info) = colliders.get(BlockColliderInfoHandle(handle.get())) else {
+        continue;
+      };
+      let (x, y, z) = Self::index_decode(i as u16);
+      if info.is_cube {
+        c.set_cube_bit(i, true);
+        c.cube_count += 1;
+      } else {
+        c.non_cube[i] = Some(Self::cuboids_for_cell(x, y, z, &info.boxes));
       }
     }
+    c.rebuild_voxels();
+    c.rebuild_composed();
+    c
+  }
 
-    let [minx, miny, minz] = min;
-    let [maxx, maxy, maxz] = max;
-    let bounds = Aabb::new(
-      Vec3::new(minx as Real, miny as Real, minz as Real),
-      Vec3::new((maxx + 1) as Real, (maxy + 1) as Real, (maxz + 1) as Real),
-    );
-
-    Self {
-      blocks,
-      aabb: bounds,
-      tree,
-      block_count,
+  fn set_cube_bit(&mut self, i: usize, on: bool) {
+    let w = i >> 6;
+    let b = i & 63;
+    if on {
+      self.cube_bits[w] |= 1u64 << b;
+    } else {
+      self.cube_bits[w] &= !(1u64 << b);
     }
   }
+
+  fn rebuild_voxels(&mut self) {
+    if self.cube_count == 0 {
+      self.voxels = None;
+      return;
+    }
+    let mut coords = Vec::with_capacity(self.cube_count as usize);
+    for (w, &word) in self.cube_bits.iter().enumerate() {
+      let mut bits = word;
+      while bits != 0 {
+        let b = bits.trailing_zeros() as usize;
+        bits &= bits - 1;
+        let i = (w << 6) | b;
+        let (x, y, z) = Self::index_decode(i as u16);
+        coords.push(IVector::new(x as i32, y as i32, z as i32));
+      }
+    }
+    self.voxels = Some(Voxels::new(Vector::splat(1.0 as Real), &coords));
+  }
+
+  fn cuboids_for_cell(
+    x: u8,
+    y: u8,
+    z: u8,
+    boxes: &[rapier3d::parry::bounding_volume::Aabb],
+  ) -> Vec<(Pose, SharedShape)> {
+    let cell = Vector::new(x as Real, y as Real, z as Real);
+    boxes
+      .iter()
+      .map(|aabb| (
+        Pose::from_translation(cell + aabb.center()),
+        SharedShape::new(Cuboid::new(aabb.half_extents())),
+      ))
+      .collect()
+  }
+
   pub fn count(&self) -> u32 {
     self.block_count
   }
-  fn on_boundary(&self, x: u8, y: u8, z: u8) -> bool {
-    let min = self.aabb.mins;
-    let max = self.aabb.maxs;
-    (x as Real) == min.x
-      || (x as Real + 1.0) == max.x
-      || (y as Real) == min.y
-      || (y as Real + 1.0) == max.y
-      || (z as Real) == min.z
-      || (z as Real + 1.0) == max.z
-  }
-  fn recompute_aabb(&mut self) {
-    let mut min = [u8::MAX, u8::MAX, u8::MAX];
-    let mut max = [u8::MIN, u8::MIN, u8::MIN];
-    let mut found = false;
-    for i in 0..CHUNK_VOLUME {
-      if self.blocks[i].is_some() {
-        found = true;
-        let (x, y, z) = Self::index_decode(i as u16);
-        min[0] = min[0].min(x);
-        min[1] = min[1].min(y);
-        min[2] = min[2].min(z);
-        max[0] = max[0].max(x);
-        max[1] = max[1].max(y);
-        max[2] = max[2].max(z);
-      }
-    }
-    if found {
-      self.aabb = Aabb::new(
-        Vec3::new(min[0] as Real, min[1] as Real, min[2] as Real),
-        Vec3::new(
-          (max[0] + 1) as Real,
-          (max[1] + 1) as Real,
-          (max[2] + 1) as Real,
-        ),
-      );
-    }
-  }
 
-  #[inline(always)]
-  pub fn set(&mut self, x: u8, y: u8, z: u8, value: Option<NonZeroU32>) {
+  pub fn set(
+    &mut self,
+    x: u8,
+    y: u8,
+    z: u8,
+    value: Option<NonZeroU32>,
+    colliders: &ColliderStore,
+  ) -> SetOutcome {
     let i = Self::index(x, y, z) as usize;
     let old = self.blocks[i];
-    self.blocks[i] = value;
-    self.tree.set_block(x, y, z, value.map(|x| x.get()));
-    match (old, value) {
-      (Some(_), Some(_)) => {}
-      (None, None) => {}
-      (None, Some(_)) => {
-        self.block_count += 1;
-        let p = Vec3::new(x as Real, y as Real, z as Real);
-        self.aabb.take_point(p);
-        self.aabb.take_point(p + Vec3::new(1.0, 1.0, 1.0));
+    if old == value {
+      return SetOutcome { changed: false, emptied: self.block_count == 0 };
+    }
+
+    let mut cubes_changed = false;
+    if old.is_some() {
+      if self.non_cube[i].take().is_none() {
+        self.set_cube_bit(i, false);
+        self.cube_count = self.cube_count.saturating_sub(1);
+        cubes_changed = true;
       }
-      (Some(_), None) => {
-        self.block_count -= 1;
-        if self.block_count > 0 && self.on_boundary(x, y, z) {
-          self.recompute_aabb();
+      self.block_count = self.block_count.saturating_sub(1);
+    }
+
+    if let Some(h) = value {
+      self.block_count += 1;
+      if let Some(info) = colliders.get(BlockColliderInfoHandle(h.get())) {
+        if info.is_cube {
+          self.set_cube_bit(i, true);
+          self.cube_count += 1;
+          self.non_cube[i] = None;
+          cubes_changed = true;
+        } else {
+          self.non_cube[i] = Some(Self::cuboids_for_cell(x, y, z, &info.boxes));
         }
+      } else {
+        self.non_cube[i] = None;
       }
     }
+
+    self.blocks[i] = value;
+    self.dirty = true;
+    self.composed = None;
+    if cubes_changed {
+      self.rebuild_voxels();
+    }
+    SetOutcome { changed: true, emptied: self.block_count == 0 }
   }
 
-  #[inline(always)]
+  fn rebuild_composed(&mut self) {
+    let has_non_cube = self.non_cube.iter().any(|c| c.is_some());
+    if self.cube_count == 0 && !has_non_cube {
+      self.composed = None;
+      self.dirty = false;
+      return;
+    }
+    if self.cube_count > 0 && !has_non_cube {
+      self.composed = Some(SharedShape::new(Voxels::new(
+        Vector::splat(1.0 as Real),
+        &self.cube_coords(),
+      )));
+      self.dirty = false;
+      return;
+    }
+    let mut children: Vec<(Pose, SharedShape)> = Vec::new();
+    if self.cube_count > 0 {
+      children.push((Pose::identity(), SharedShape::new(Voxels::new(
+        Vector::splat(1.0 as Real),
+        &self.cube_coords(),
+      ))));
+    }
+    for cell in self.non_cube.iter().flatten() {
+      children.extend(cell.iter().cloned());
+    }
+    self.composed = Some(SharedShape::compound(children));
+    self.dirty = false;
+  }
+
+  fn cube_coords(&self) -> Vec<IVector> {
+    let mut coords = Vec::with_capacity(self.cube_count as usize);
+    for (w, &word) in self.cube_bits.iter().enumerate() {
+      let mut bits = word;
+      while bits != 0 {
+        let b = bits.trailing_zeros() as usize;
+        bits &= bits - 1;
+        let i = (w << 6) | b;
+        let (x, y, z) = Self::index_decode(i as u16);
+        coords.push(IVector::new(x as i32, y as i32, z as i32));
+      }
+    }
+    coords
+  }
+
+  pub fn compose(&mut self) -> Option<SharedShape> {
+    if self.dirty {
+      self.rebuild_composed();
+    }
+    self.composed.clone()
+  }
+
   pub fn get(&self, x: u8, y: u8, z: u8) -> BlockColliderInfoHandle {
     BlockColliderInfoHandle(
-      self.blocks[Self::index(x, y, z) as usize]
-        .map(|x| x.get())
-        .unwrap_or(0),
+      self.blocks[Self::index(x, y, z) as usize].map(NonZeroU32::get).unwrap_or(0),
     )
   }
+
   #[inline(always)]
   pub fn index(x: u8, y: u8, z: u8) -> u16 {
     (y as u16) << 8 | (z as u16) << 4 | x as u16
   }
+
   #[inline(always)]
-  fn index_decode(index: u16) -> (u8, u8, u8) {
-    let x = (index & 0xF) as u8;
-    let z = ((index >> 4) & 0xF) as u8;
-    let y = ((index >> 8) & 0xF) as u8;
-    (x, y, z)
-  }
-}
-impl Shape for Chunklet {
-  fn compute_local_aabb(&self) -> Aabb {
-    self.aabb
-  }
-
-  fn compute_local_bounding_sphere(&self) -> BoundingSphere {
-    self.aabb.bounding_sphere()
-  }
-
-  fn clone_dyn(&self) -> Box<dyn Shape> {
-    Box::new(self.clone())
-  }
-
-  fn scale_dyn(
-    &self,
-    _scale: rapier3d::prelude::Vector,
-    _num_subdivisions: u32,
-  ) -> Option<Box<dyn Shape>> {
-    //this could actually be very nice to have as an option
-    todo!()
-  }
-
-  fn mass_properties(&self, density: Real) -> MassProperties {
-    let lock = COLLIDERS.read().unwrap();
-    self
-      .blocks
-      .iter()
-      .enumerate()
-      .filter_map(|(i, block)| {
-        let handle = (*block)?;
-        let info = lock.get(BlockColliderInfoHandle(handle.get()))?;
-        let (x, y, z) = Self::index_decode(i as u16);
-        let pose = Pose::translation(x as Real, y as Real, z as Real);
-        Some((pose, info))
-      })
-      .flat_map(|(pose, block_info)| {
-        block_info
-          .boxes
-          .iter()
-          .map(|x| {
-            (
-              Pose::from_translation(x.center()),
-              Cuboid::new(x.half_extents()),
-            )
-          })
-          .map(move |x| (x.0 * pose, x.1))
-          .map(|s| s.1.mass_properties(density).transform_by(&s.0))
-      })
-      .fold(MassProperties::default(), |acc, mp| acc + mp)
-  }
-
-  fn shape_type(&self) -> ShapeType {
-    ShapeType::Custom
-  }
-
-  fn as_typed_shape(&self) -> TypedShape<'_> {
-    TypedShape::Custom(self)
-  }
-
-  fn ccd_thickness(&self) -> Real {
-    0.25
-  }
-
-  fn ccd_angular_thickness(&self) -> Real {
-    core::f32::consts::PI / 8.0
-  }
-}
-impl RayCast for Chunklet {
-  fn cast_local_ray_and_get_normal(
-    &self,
-    ray: &Ray,
-    max_time_of_impact: Real,
-    solid: bool,
-  ) -> Option<RayIntersection> {
-    let lock = COLLIDERS.read().unwrap();
-    let end = ray.origin + ray.dir * max_time_of_impact;
-    let qmins = [
-      ray.origin.x.min(end.x) - 1.0,
-      ray.origin.y.min(end.y) - 1.0,
-      ray.origin.z.min(end.z) - 1.0,
-    ];
-    let qmaxs = [
-      ray.origin.x.max(end.x) + 1.0,
-      ray.origin.y.max(end.y) + 1.0,
-      ray.origin.z.max(end.z) + 1.0,
-    ];
-    let mut best: Option<(Real, Vec3)> = None;
-    self.tree.query_aabb(qmins, qmaxs, |handle, x, y, z| {
-      let Some(info) = lock.get(BlockColliderInfoHandle(handle)) else {
-        return;
-      };
-      for aabb in info.boxes.iter() {
-        let center = aabb.center() + Vec3::new(x as Real, y as Real, z as Real);
-        let cuboid = Cuboid::new(aabb.half_extents());
-        let local_ray = Ray::new(ray.origin - center, ray.dir);
-        if let Some(hit) =
-          cuboid.cast_local_ray_and_get_normal(&local_ray, max_time_of_impact, solid)
-          && best.is_none_or(|(toi, _)| hit.time_of_impact < toi)
-        {
-          best = Some((hit.time_of_impact, hit.normal));
-        }
-      }
-    });
-    best.map(|(toi, normal)| RayIntersection::new(toi, normal, FeatureId::Face(0)))
-  }
-}
-impl PointQuery for Chunklet {
-  fn project_local_point(&self, pt: Vec3, solid: bool) -> PointProjection {
-    let lock = COLLIDERS.read().unwrap();
-    let mut best: Option<(Real, PointProjection)> = None;
-    self
-      .tree
-      .query_aabb([0.0; 3], [CHUNK_SIDE as Real; 3], |handle, x, y, z| {
-        let Some(info) = lock.get(BlockColliderInfoHandle(handle)) else {
-          return;
-        };
-        for aabb in info.boxes.iter() {
-          let center = aabb.center() + Vec3::new(x as Real, y as Real, z as Real);
-          let cuboid = Cuboid::new(aabb.half_extents());
-          let proj = cuboid.project_local_point(pt - center, solid);
-          let projected = PointProjection::new(proj.is_inside, proj.point + center);
-          let dist = (projected.point - pt).length_squared();
-          if projected.is_inside {
-            best = Some((0.0, projected));
-            return;
-          }
-          if best.is_none_or(|(best_dist, _)| dist < best_dist) {
-            best = Some((dist, projected));
-          }
-        }
-      });
-    best
-      .map(|(_, proj)| proj)
-      .unwrap_or(PointProjection::new(false, pt))
-  }
-
-  fn project_local_point_and_get_feature(&self, pt: Vec3) -> (PointProjection, FeatureId) {
-    (self.project_local_point(pt, false), FeatureId::Face(0))
+  pub fn index_decode(index: u16) -> (u8, u8, u8) {
+    ((index & 0xF) as u8, ((index >> 8) & 0xF) as u8, ((index >> 4) & 0xF) as u8)
   }
 }

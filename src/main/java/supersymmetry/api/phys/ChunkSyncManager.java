@@ -47,7 +47,9 @@ public class ChunkSyncManager {
     private static List<AxisAlignedBB> aabbTmp = new ArrayList<>();
 
     private static final int STALE_TICK_TIMEOUT = 80;
-    private static final int MAX_CACHED_SUBCHUNKS = 1024;
+    private static final int MAX_CACHED_SUBCHUNKS = 4096;
+    private static final int MAX_HPAD_CHUNKS = 8;
+    private static final int MAX_SYNC_RADIUS_CHUNKS = 12;
 
     private final Long2ObjectOpenHashMap<Ticket> tickets = new Long2ObjectOpenHashMap<>();
     private final Long2ObjectOpenHashMap<CachedSubchunk> cached = new Long2ObjectOpenHashMap<>();
@@ -131,14 +133,16 @@ public class ChunkSyncManager {
 
         double hSpeed = Math.max(Math.abs(motionX), Math.abs(motionZ)) / 16.0;
 
-        int hPad = (int) Math.ceil(hSpeed * 1.3);
-        int vPad = (int) Math.ceil((Math.abs(motionY) / 16.0) * 1.5);
-        int minCX = MathHelper.floor(bb.minX / 16.0) - hPad;
-        int maxCX = MathHelper.ceil(bb.maxX / 16.0) + hPad;
+        int hPad = Math.min((int) Math.ceil(hSpeed * 1.3), MAX_HPAD_CHUNKS);
+        int vPad = Math.min((int) Math.ceil((Math.abs(motionY) / 16.0) * 1.5), 4);
+        int centerCX = MathHelper.floor((bb.minX + bb.maxX) * 0.03125);
+        int centerCZ = MathHelper.floor((bb.minZ + bb.maxZ) * 0.03125);
+        int minCX = Math.max(MathHelper.floor(bb.minX / 16.0) - hPad, centerCX - MAX_SYNC_RADIUS_CHUNKS);
+        int maxCX = Math.min(MathHelper.ceil(bb.maxX / 16.0) + hPad, centerCX + MAX_SYNC_RADIUS_CHUNKS);
         int minCY = MathHelper.clamp(MathHelper.floor(bb.minY / 16.0) - vPad, 0, 15);
         int maxCY = MathHelper.clamp(MathHelper.ceil(bb.maxY / 16.0) + vPad, 0, 15);
-        int minCZ = MathHelper.floor(bb.minZ / 16.0) - hPad;
-        int maxCZ = MathHelper.ceil(bb.maxZ / 16.0) + hPad;
+        int minCZ = Math.max(MathHelper.floor(bb.minZ / 16.0) - hPad, centerCZ - MAX_SYNC_RADIUS_CHUNKS);
+        int maxCZ = Math.min(MathHelper.ceil(bb.maxZ / 16.0) + hPad, centerCZ + MAX_SYNC_RADIUS_CHUNKS);
         for (int cx = minCX; cx <= maxCX; cx++) {
             for (int cz = minCZ; cz <= maxCZ; cz++) {
                 if (isPlotOrHeapChunk(cx, cz)) continue;
@@ -185,7 +189,12 @@ public class ChunkSyncManager {
 
     private void putCache(long k, CachedSubchunk cachedSub) {
         if (cached.size() >= MAX_CACHED_SUBCHUNKS) {
-            cached.clear();
+            var it = cached.long2ObjectEntrySet().fastIterator();
+            int toRemove = MAX_CACHED_SUBCHUNKS / 4;
+            for (int i = 0; i < toRemove && it.hasNext(); i++) {
+                it.next();
+                it.remove();
+            }
         }
         cached.put(k, cachedSub);
     }

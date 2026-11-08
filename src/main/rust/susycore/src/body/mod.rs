@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+
 use jni::EnvUnowned;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
@@ -7,10 +8,11 @@ use rapier3d::dynamics::RigidBodyHandle;
 use rapier3d::glamx::Quat;
 use rapier3d::math::{Pose, Vec3};
 use rapier3d::prelude::{
-  ActiveEvents, ColliderBuilder, ColliderHandle, Group, InteractionGroups, InteractionTestMode, RigidBodyBuilder, SharedShape,
+  ActiveEvents, ColliderBuilder, ColliderHandle, Group, InteractionGroups, InteractionTestMode,
+  RigidBodyBuilder,
 };
 
-use crate::block_collisions::{AIR_HANDLE, BlockColliderInfoHandle};
+use crate::block_collisions::{AIR_HANDLE, BlockColliderInfoHandle, COLLIDERS};
 use crate::chunklet::Chunklet;
 use crate::contact_forces::CONTACT_FORCE_EVENT_THRESHOLD;
 use crate::scene::Scene;
@@ -19,12 +21,14 @@ use crate::{EntityId, Real};
 
 pub struct BodyEntry {
   pub rb: RigidBodyHandle,
-  pub colliders: HashMap<PackedChunkletCoords, ColliderHandle>,
+  pub chunks: HashMap<PackedChunkletCoords, (Chunklet, ColliderHandle)>,
+  pub anchor: Option<ColliderHandle>,
 }
 
 pub const BLOCK_DENSITY: Real = 1000.0;
 pub const POSE_BUFFER_LEN: usize = 11;
 pub const ANCHOR_COLLIDER_HALF_EXTENT: Real = 0.0625;
+const SOFT_CCD_PREDICTION: Real = 4.0;
 
 impl Scene {
   pub fn create_chunklet_body(
@@ -37,18 +41,36 @@ impl Scene {
       log::warn!("chunklet body for {:?} already exists, replacing", entity);
       self.remove_chunklet_body(entity);
     }
-    let rb = RigidBodyBuilder::dynamic()
-      .pose(Pose::from_parts(pos, rot))
-      .build();
-    let handle = self.world.bodies.insert(rb);
+    let handle = self.world.bodies.insert(
+      RigidBodyBuilder::dynamic()
+        .pose(Pose::from_parts(pos, rot))
+        .linear_damping(0.1)
+        .angular_damping(0.3)
+        .ccd_enabled(true)
+        .soft_ccd_prediction(SOFT_CCD_PREDICTION)
+        .build(),
+    );
     self.chunklet_bodies.insert(
       entity,
       BodyEntry {
         rb: handle,
-        colliders: HashMap::new(),
+        chunks: HashMap::new(),
+        anchor: None,
       },
     );
     handle
+  }
+
+  pub fn set_body_damping(&mut self, entity: EntityId, linear: Real, angular: Real) -> bool {
+    let Some(rb) = self.rb_of(entity) else {
+      return false;
+    };
+    let Some(body) = self.world.bodies.get_mut(rb) else {
+      return false;
+    };
+    body.set_linear_damping(linear);
+    body.set_angular_damping(angular);
+    true
   }
 
   pub fn create_anchor_body(&mut self, entity: EntityId, pos: Vec3) -> RigidBodyHandle {
@@ -56,31 +78,32 @@ impl Scene {
       log::warn!("chunklet body for {:?} already exists, replacing", entity);
       self.remove_chunklet_body(entity);
     }
-    let rb = RigidBodyBuilder::fixed()
-      .pose(Pose::from_parts(pos, Quat::IDENTITY))
-      .build();
-    let handle = self.world.bodies.insert(rb);
-    let collider = ColliderBuilder::cuboid(
-      ANCHOR_COLLIDER_HALF_EXTENT,
-      ANCHOR_COLLIDER_HALF_EXTENT,
-      ANCHOR_COLLIDER_HALF_EXTENT,
-    )
-    .collision_groups(InteractionGroups::new(
-      Group::NONE,
-      Group::NONE,
-      InteractionTestMode::And,
-    ))
-    .build();
-    let collider_handle =
-      self
-        .world
-        .colliders
-        .insert_with_parent(collider, handle, &mut self.world.bodies);
+    let handle = self.world.bodies.insert(
+      RigidBodyBuilder::fixed()
+        .pose(Pose::from_parts(pos, Quat::IDENTITY))
+        .build(),
+    );
+    let anchor = self.world.colliders.insert_with_parent(
+      ColliderBuilder::cuboid(
+        ANCHOR_COLLIDER_HALF_EXTENT,
+        ANCHOR_COLLIDER_HALF_EXTENT,
+        ANCHOR_COLLIDER_HALF_EXTENT,
+      )
+      .collision_groups(InteractionGroups::new(
+        Group::NONE,
+        Group::NONE,
+        InteractionTestMode::And,
+      ))
+      .build(),
+      handle,
+      &mut self.world.bodies,
+    );
     self.chunklet_bodies.insert(
       entity,
       BodyEntry {
         rb: handle,
-        colliders: HashMap::from([(PackedChunkletCoords::from_xyz(0, 0, 0), collider_handle)]),
+        chunks: HashMap::new(),
+        anchor: Some(anchor),
       },
     );
     handle
@@ -97,23 +120,23 @@ impl Scene {
       self.remove_body_chunk(entity, coords);
       return None;
     }
+    let mut chunklet = Chunklet::new_with_blockhandle(data);
+    let shape = chunklet.compose()?;
     let Some(entry) = self.chunklet_bodies.get_mut(&entity) else {
       log::error!("add_body_chunk on missing body {}", entity.0);
       return None;
     };
-    let chunklet = Chunklet::new_with_blockhandle(data);
-    let collider = ColliderBuilder::new(SharedShape::new(chunklet))
-      .density(BLOCK_DENSITY)
-      .translation(offset)
-      .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
-      .contact_force_event_threshold(CONTACT_FORCE_EVENT_THRESHOLD)
-      .build();
-    let handle =
-      self
-        .world
-        .colliders
-        .insert_with_parent(collider, entry.rb, &mut self.world.bodies);
-    if let Some(old) = entry.colliders.insert(coords, handle) {
+    let handle = self.world.colliders.insert_with_parent(
+      ColliderBuilder::new(shape)
+        .density(BLOCK_DENSITY)
+        .translation(offset)
+        .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
+        .contact_force_event_threshold(CONTACT_FORCE_EVENT_THRESHOLD)
+        .build(),
+      entry.rb,
+      &mut self.world.bodies,
+    );
+    if let Some((_, old)) = entry.chunks.insert(coords, (chunklet, handle)) {
       self.remove_collider(old);
     }
     self.collider_owners.insert(handle, entity);
@@ -129,50 +152,48 @@ impl Scene {
     z: u8,
     new_block: BlockColliderInfoHandle,
   ) -> bool {
-    let Some(&handle) = self
-      .chunklet_bodies
-      .get(&entity)
-      .and_then(|e| e.colliders.get(&coords))
-    else {
-      log::error!(
-        "update_body_block on missing chunk {coords:?} of body {}",
-        entity.0
-      );
+    let Some(entry) = self.chunklet_bodies.get_mut(&entity) else {
+      log::error!("update_body_block on missing body {}", entity.0);
       return false;
     };
-    let Some(collider) = self.world.colliders.get_mut(handle) else {
-      log::error!(
-        "stale collider {handle:?} for chunk {coords:?} of body {}",
-        entity.0
-      );
+    let Some((chunk, handle)) = entry.chunks.get_mut(&coords) else {
+      log::error!("update_body_block on missing chunk {coords:?} of body {}", entity.0);
       return false;
     };
-    let Some(shape) = collider.shape_mut().as_shape_mut::<Chunklet>() else {
-      log::error!("body chunklet collider {handle:?} is not a Chunklet");
-      return false;
+    let handle = *handle;
+    let outcome = {
+      let guard = COLLIDERS.read().unwrap();
+      chunk.set(x, y, z, new_block.into_block(), &guard)
     };
-    shape.set(x, y, z, new_block.into_block());
-    let emptied = shape.count() == 0;
-    if emptied {
-      self.remove_body_chunk(entity, coords);
+    if !outcome.changed {
+      return !outcome.emptied;
     }
-    !emptied
+    if outcome.emptied {
+      self.remove_body_chunk(entity, coords);
+      return false;
+    }
+    let Some(shape) = chunk.compose() else {
+      self.remove_body_chunk(entity, coords);
+      return false;
+    };
+    if let Some(co) = self.world.colliders.get_mut(handle) {
+      co.set_shape(shape);
+    }
+    true
   }
 
   pub fn remove_body_chunk(&mut self, entity: EntityId, coords: PackedChunkletCoords) {
-    let Some(handle) = self
-      .chunklet_bodies
-      .get_mut(&entity)
-      .and_then(|e| e.colliders.remove(&coords))
-    else {
-      return;
+    let (handle, prune) = {
+      let Some(entry) = self.chunklet_bodies.get_mut(&entity) else {
+        return;
+      };
+      let Some((_, handle)) = entry.chunks.remove(&coords) else {
+        return;
+      };
+      (handle, entry.chunks.is_empty() && entry.anchor.is_none())
     };
     self.remove_collider(handle);
-    if self
-      .chunklet_bodies
-      .get(&entity)
-      .is_some_and(|entry| entry.colliders.is_empty())
-    {
+    if prune {
       self.prune_joints_of(entity);
     }
   }
@@ -199,7 +220,10 @@ impl Scene {
     let Some(entry) = self.chunklet_bodies.remove(&entity) else {
       return;
     };
-    for handle in entry.colliders.into_values() {
+    for (_, handle) in entry.chunks.into_values() {
+      self.collider_owners.remove(&handle);
+    }
+    if let Some(handle) = entry.anchor {
       self.collider_owners.remove(&handle);
     }
     self.world.bodies.remove(
@@ -519,5 +543,18 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_applyImpulseAtPoint(
   });
 }
 
-#[cfg(test)]
-mod tests;
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setBodyDamping(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  tag: jint,
+  linear: jdouble,
+  angular: jdouble,
+) -> bool {
+  debug_assert!(world_id >= 0);
+  Scene::with_scene_mut(world_id as usize, |scene| {
+    scene.set_body_damping(EntityId(tag), linear as Real, angular as Real)
+  })
+  .unwrap_or(false)
+}

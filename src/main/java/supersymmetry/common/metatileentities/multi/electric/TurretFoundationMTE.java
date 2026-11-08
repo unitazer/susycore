@@ -22,6 +22,7 @@ import gregtech.api.metatileentity.MetaTileEntity;
 import gregtech.api.metatileentity.MetaTileEntityHolder;
 import gregtech.api.metatileentity.interfaces.IGregTechTileEntity;
 import gregtech.api.metatileentity.multiblock.IMultiblockPart;
+import gregtech.api.metatileentity.multiblock.MultiblockControllerBase;
 import gregtech.api.metatileentity.multiblock.MultiblockWithDisplayBase;
 import gregtech.api.pattern.BlockPattern;
 import gregtech.api.pattern.FactoryBlockPattern;
@@ -39,11 +40,12 @@ import supersymmetry.api.phys.UnformFlow;
 import supersymmetry.api.phys.constraint.Axis;
 import supersymmetry.api.phys.constraint.PhysicsConstraint;
 import supersymmetry.api.subworld.SubWorldPlot;
+import supersymmetry.common.metatileentities.SuSyMetaTileEntities;
 
 public class TurretFoundationMTE extends MultiblockWithDisplayBase {
 
-    private static final double HOLD_STIFFNESS = 30.0;
-    private static final double HOLD_DAMPING = 8.0;
+    private static final double HOLD_STIFFNESS = 0.0;
+    private static final double HOLD_DAMPING = 2.0;
     private static final double AIM_ANGULAR_VELOCITY = 1.2;
     private static final double AIM_DRIVE_DAMPING = 80.0;
     private static final double AIM_TORQUE = 150.0;
@@ -129,20 +131,43 @@ public class TurretFoundationMTE extends MultiblockWithDisplayBase {
     protected void updateFormedValid() {}
 
     @Override
+    public boolean allowsExtendedFacing() {
+        return false;
+    }
+
+    @Override
     public ICubeRenderer getBaseTexture(IMultiblockPart sourcePart) {
         return Textures.STEEL_FIREBOX;
     }
 
     @Override
     protected ModularUI createUI(EntityPlayer entityPlayer) {
-        ModularUI.Builder builder = ModularUI.builder(GuiTextures.BACKGROUND, 198, 208);
-        builder.widget(
-                new ClickButtonWidget(10, 10, 120, 18, "form turret entity", clickData -> formTurretEntity()));
-        builder.widget(
-                new SliderWidget("pitch (x)", 10, 40, 178, 20, -1.0f, 1.0f, 0.0f, value -> aim(Axis.ANG_X, value)));
-        builder.widget(
-                new SliderWidget("yaw (y)", 10, 70, 178, 20, -1.0f, 1.0f, 0.0f, value -> aim(Axis.ANG_Y, value)));
+        var builder = ModularUI.builder(GuiTextures.BACKGROUND, 198, 208);
+        builder.widget(new ClickButtonWidget(7, 10, 88, 18, "form turret", clickData -> formTurretEntity()));
+        builder.widget(new ClickButtonWidget(98, 10, 93, 18, "spawn barrel ctl", clickData -> spawnGunController()));
+        builder.widget(new SliderWidget("pitch (x)", 10, 40, 178, 20, -1.0f, 1.0f, 0.0f, value -> aim(Axis.ANG_X, value)));
+        builder.widget(new SliderWidget("yaw (y)", 10, 70, 178, 20, -1.0f, 1.0f, 0.0f, value -> aim(Axis.ANG_Y, value)));
         return builder.build(getHolder(), entityPlayer);
+    }
+
+    private void spawnGunController() {
+        var world = getWorld();
+        if (world == null || world.isRemote) return;
+        var pos = gunPos();
+        if (PhysicsWorldEntity.forBlockPos(world, pos) != null) return;
+        var te = world.getTileEntity(pos);
+        if (te instanceof MetaTileEntityHolder h && h.getMetaTileEntity() instanceof TestingBarrelMTE) return;
+        if (!world.isAirBlock(pos) && !world.getBlockState(pos).getBlock().isReplaceable(world, pos)) {
+            SusyLog.logger.warn("cannot spawn barrel controller at {}: occupied", pos);
+            return;
+        }
+        world.setBlockState(pos, MetaBlocks.MACHINE.getDefaultState(), 3);
+        var te2 = world.getTileEntity(pos);
+        if (!(te2 instanceof MetaTileEntityHolder holder)) return;
+        var actual = holder.setMetaTileEntity(SuSyMetaTileEntities.TEST_BARREL);
+        actual.setFrontFacing(getFrontFacing());
+        if (actual instanceof MultiblockControllerBase mb) mb.reinitializeStructurePattern();
+        holder.markDirty();
     }
 
     private void formTurretEntity() {
@@ -157,7 +182,7 @@ public class TurretFoundationMTE extends MultiblockWithDisplayBase {
         }
         TestingBarrelMTE gun = findGun();
         if (gun == null || !gun.isStructureFormed() || gun.structurePattern == null) {
-            SusyLog.logger.warn("no formed gun controller {} blocks above {}", GUN_OFFSET_Y, getPos());
+            SusyLog.logger.warn("no formed gun controller at {}", gunPos());
             return;
         }
         if (PhysicsWorldEntity.forBlockPos(world, gun.getPos()) != null) {
@@ -216,7 +241,7 @@ public class TurretFoundationMTE extends MultiblockWithDisplayBase {
         }
 
         gunId = entity.getUniqueID();
-        PhysicsConstraint constraint = PhysicsConstraint.toAnchor(getPos())
+        var constraint = PhysicsConstraint.toAnchor(getPos())
                 .lockTranslations()
                 .allowRotations(true, true, false)
                 .motor(Axis.ANG_Y, 0.0, 0.0, HOLD_STIFFNESS, HOLD_DAMPING, Double.MAX_VALUE, true)
@@ -272,23 +297,28 @@ public class TurretFoundationMTE extends MultiblockWithDisplayBase {
                 .orElse(null);
     }
 
+    private BlockPos gunPos() {
+        return getPos().up(GUN_OFFSET_Y);
+    }
+
     @Nullable private TestingBarrelMTE findGun() {
-        TileEntity tileEntity = getWorld().getTileEntity(getPos().up(GUN_OFFSET_Y));
+        var tileEntity = getWorld().getTileEntity(gunPos());
         return tileEntity instanceof MetaTileEntityHolder holder &&
                 holder.getMetaTileEntity() instanceof TestingBarrelMTE gun ? gun : null;
     }
 
     private void aim(Axis axis, float command) {
+        command = command*100f;
         if (getWorld().isRemote) return;
         PhysicsWorldEntity gun = resolveGun();
         if (gun == null) return;
         for (PhysicsConstraint constraint : gun.getConstraints()) {
-            if (Math.abs(command) <= AIM_DEAD_ZONE) {
-                gun.setJointMotor(constraint, axis, 0.0, 0.0, HOLD_STIFFNESS, HOLD_DAMPING, Double.MAX_VALUE, true);
-            } else {
+            // if (Math.abs(command) <= AIM_DEAD_ZONE) {
+            //     gun.setJointMotor(constraint, axis, 0.0, 0.0, HOLD_STIFFNESS, HOLD_DAMPING, Double.MAX_VALUE, true);
+            // } else {
                 gun.setJointMotor(constraint, axis, 0.0, Math.signum(command) * AIM_ANGULAR_VELOCITY, 0.0,
                         AIM_DRIVE_DAMPING, AIM_TORQUE * Math.abs(command), true);
-            }
+            // }
         }
     }
 

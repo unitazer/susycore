@@ -22,7 +22,9 @@ import supersymmetry.api.phys.UnformFlow;
 
 public class TestingBarrelMTE extends MultiblockWithDisplayBase {
 
-    private static final int BARREL_LENGTH = 100;
+    public static final int BARREL_LENGTH = 100;
+    public static final int TRUNNION_I = 4;
+    public static final int CONTROLLER_I = 0;
 
     public TestingBarrelMTE(ResourceLocation res) {
         super(res);
@@ -35,39 +37,43 @@ public class TestingBarrelMTE extends MultiblockWithDisplayBase {
 
     @Override
     protected @NotNull BlockPattern createStructurePattern() {
-        final double outerDiameter = 9.6D;
-        final double innerRadius = 1.6D;
+        var outerBreech = 5.0D;
+        var outerMuzzle = 2.8D;
+        var innerRadius = 1.2D;
+        var breechCap = 3;
 
-        final int size = (int) outerDiameter + 1;
-        final double center = (size - 1) / 2.0D;
-        final double outerRadius = outerDiameter / 2.0D;
+        var rowLength = Math.max(1, BARREL_LENGTH);
+        var size = (int) (outerBreech * 2) + 1;
+        var center = (size - 1) / 2.0D;
+        var innerSq = innerRadius * innerRadius;
+        var span = Math.max(1, rowLength - breechCap - 1);
 
-        final int rowLength = Math.max(1, BARREL_LENGTH);
-        final String casing = "C".repeat(rowLength);
-        final String air = " ".repeat(rowLength);
-        final String controller = "S" + casing.substring(1);
+        var outerSq = new double[rowLength];
+        for (var i = 0; i < rowLength; i++) {
+            var t = i <= breechCap ? 0.0D : Math.min(1.0D, (double) (i - breechCap) / span);
+            var r = outerBreech - (outerBreech - outerMuzzle) * t;
+            outerSq[i] = r * r;
+        }
+
+        var ci = (int) Math.round(center);
+        var sy = ci;
+        var sz = ci;
 
         var factory = FactoryBlockPattern.start();
-        boolean placedController = false;
-
-        for (int y = 0; y < size; y++) {
-            String[] aisle = new String[size];
-
-            for (int z = 0; z < size; z++) {
-                double dy = y - center;
-                double dz = z - center;
-                double distSq = dy * dy + dz * dz;
-
-                boolean inRing = distSq <= outerRadius * outerRadius && distSq >= innerRadius * innerRadius;
-
-                aisle[z] = inRing ? casing : air;
-
-                if (inRing && !placedController) {
-                    aisle[z] = controller;
-                    placedController = true;
+        for (var y = 0; y < size; y++) {
+            var aisle = new String[size];
+            for (var z = 0; z < size; z++) {
+                var dy = y - center;
+                var dz = z - center;
+                var distSq = dy * dy + dz * dz;
+                var row = new char[rowLength];
+                for (var i = 0; i < rowLength; i++) {
+                    var solid = i < breechCap ? distSq <= outerSq[i] : distSq <= outerSq[i] && distSq >= innerSq;
+                    row[i] = solid ? 'C' : ' ';
                 }
+                if (y == sy && z == sz) row[CONTROLLER_I] = 'S';
+                aisle[z] = new String(row);
             }
-
             factory.aisle(aisle);
         }
 
@@ -87,6 +93,11 @@ public class TestingBarrelMTE extends MultiblockWithDisplayBase {
         if (wasFormed && getWorld() != null && !getWorld().isRemote && !PhysicsWorldEntity.resyncingFormedMultiblocks) {
             UnformFlow.unform(PhysicsWorldEntity.forBlockPos(getWorld(), getPos()));
         }
+    }
+
+    @Override
+    public boolean allowsExtendedFacing() {
+        return false;
     }
 
     @Override

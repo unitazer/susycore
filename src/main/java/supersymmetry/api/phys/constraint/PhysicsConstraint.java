@@ -1,7 +1,6 @@
 package supersymmetry.api.phys.constraint;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
@@ -33,13 +32,12 @@ public final class PhysicsConstraint {
     private static int anchorTagCounter = ANCHOR_TAG_BASE;
 
     @Nullable private final UUID otherEndpoint;
-    private boolean staticEndpoint;
     private int anchorTag;
     private long rustHandle;
     private int epochSeen = -1;
     private final EnumSet<Axis> lockedAxes = EnumSet.noneOf(Axis.class);
     private final EnumSet<Axis> coupledAxes = EnumSet.noneOf(Axis.class);
-    private final Map<Axis, AxisState> axes = new EnumMap<>(Axis.class);
+    private final EnumMap<Axis, AxisState> axes = new EnumMap<>(Axis.class);
     private BlockPos anchorSelfBlock = BlockPos.ORIGIN;
     private BlockPos anchorOtherBlock = BlockPos.ORIGIN;
     private boolean contactsEnabled;
@@ -64,8 +62,7 @@ public final class PhysicsConstraint {
     }
 
     public static PhysicsConstraint toAnchor(BlockPos anchorBlock) {
-        PhysicsConstraint constraint = new PhysicsConstraint(null);
-        constraint.staticEndpoint = true;
+        var constraint = new PhysicsConstraint(null);
         constraint.anchorOtherBlock = anchorBlock;
         return constraint;
     }
@@ -88,33 +85,30 @@ public final class PhysicsConstraint {
 
     public PhysicsConstraint couple(Axis first, Axis... rest) {
         coupledAxes.add(first);
-        Collections.addAll(coupledAxes, rest);
+        for (var axis : rest) coupledAxes.add(axis);
         return this;
     }
 
     public PhysicsConstraint limitAxis(Axis axis, double min, double max) {
-        if (!Double.isFinite(min) || !Double.isFinite(max)) {
-            throw new IllegalArgumentException(String.format("joint limits must be finite: [%f, %f]", min, max));
+        if (!Double.isFinite(min) || !Double.isFinite(max) || min > max) {
+            throw new IllegalArgumentException(
+                    String.format("invalid joint limits [%f, %f]", min, max));
         }
-        if (min > max) {
-            throw new IllegalArgumentException(String.format("inverted joint limits: [%f, %f]", min, max));
+        if (!lockedAxes.contains(axis)) {
+            var s = state(axis);
+            s.limitMin = min;
+            s.limitMax = max;
+        } else {
+            SusyLog.logger.warn("ignoring limit on locked axis {}", axis);
         }
-        if (rejectLocked(axis)) {
-            return this;
-        }
-        AxisState state = state(axis);
-        state.limitMin = min;
-        state.limitMax = max;
         return this;
     }
 
     public PhysicsConstraint spring(double stiffness, double damping) {
         requireFiniteMotor(0.0, 0.0, stiffness, damping, Double.MAX_VALUE);
-        for (Axis axis : Axis.LINEAR) {
-            if (rejectLocked(axis)) {
-                continue;
-            }
-            Motor motor = Motor.of(0.0, 0.0, stiffness, damping, Double.MAX_VALUE, true);
+        for (var axis : Axis.LINEAR) {
+            if (lockedAxes.contains(axis)) continue;
+            var motor = Motor.of(0.0, 0.0, stiffness, damping, Double.MAX_VALUE, true);
             motor.spring = true;
             state(axis).motor = motor;
         }
@@ -124,7 +118,8 @@ public final class PhysicsConstraint {
     public PhysicsConstraint motor(Axis axis, double targetPos, double targetVel, double stiffness, double damping,
                                    double maxForce, boolean forceBased) {
         requireFiniteMotor(targetPos, targetVel, stiffness, damping, maxForce);
-        if (rejectLocked(axis)) {
+        if (lockedAxes.contains(axis)) {
+            SusyLog.logger.warn("ignoring motor on locked axis {}", axis);
             return this;
         }
         state(axis).motor = Motor.of(targetPos, targetVel, stiffness, damping, maxForce, forceBased);
@@ -151,13 +146,15 @@ public final class PhysicsConstraint {
     }
 
     public boolean isStatic() {
-        return staticEndpoint;
+        return otherEndpoint == null;
+    }
+
+    public boolean isDead() {
+        return dead;
     }
 
     public void attachAnchor(World world, int tag) {
-        if (!staticEndpoint || tag == 0 || anchorTag == tag) {
-            return;
-        }
+        if (otherEndpoint != null || tag == 0 || anchorTag == tag) return;
         teardown(world);
         anchorTag = tag;
     }
@@ -165,29 +162,21 @@ public final class PhysicsConstraint {
     public void remapAnchors(int dx, int dz, boolean self) {
         if (self) {
             anchorSelfBlock = anchorSelfBlock.add(dx, 0, dz);
-        } else if (!staticEndpoint) {
+        } else if (otherEndpoint != null) {
             anchorOtherBlock = anchorOtherBlock.add(dx, 0, dz);
         }
     }
 
-    public boolean isDead() {
-        return dead;
-    }
-
     public boolean setMotor(World world, Axis axis, double targetPos, double targetVel, double stiffness,
                             double damping, double maxForce, boolean forceBased) {
-        if (!finiteMotor(targetPos, targetVel, stiffness, damping, maxForce)) {
-            return false;
-        }
-        if (rejectLocked(axis)) {
+        if (!finiteMotor(targetPos, targetVel, stiffness, damping, maxForce)) return false;
+        if (lockedAxes.contains(axis)) {
+            SusyLog.logger.warn("ignoring motor on locked axis {}", axis);
             return false;
         }
         state(axis).motor = Motor.of(targetPos, targetVel, stiffness, damping, maxForce, forceBased);
-        if (rustHandle == 0) {
-            return false;
-        }
-        return Rapier.setJointMotor(world, rustHandle, axis.index(), targetPos, targetVel, stiffness, damping,
-                maxForce, forceBased);
+        return rustHandle != 0 && Rapier.setJointMotor(world, rustHandle, axis.index(), targetPos, targetVel,
+                stiffness, damping, maxForce, forceBased);
     }
 
     public void teardown(World world) {
@@ -199,38 +188,27 @@ public final class PhysicsConstraint {
     }
 
     public void update(PhysicsWorldEntity self) {
-        if (dead) {
-            return;
-        }
-        PhysicsWorldEntity other = staticEndpoint ? null : resolveEntityEndpoint(self);
-        if (dead) {
-            return;
-        }
-        if (endpointMissing(self, other)) {
+        if (dead) return;
+        var other = resolveBody(self);
+        if (dead) return;
+        if (!self.hasColliders() || (otherEndpoint == null ? anchorTag == 0 : other == null || !other.hasColliders())) {
             teardown(self.getEntityWorld());
             return;
         }
-        if (waitingForBody(other) || handleCurrent(other) || self.ticksExisted < retryAfterTick) {
-            return;
-        }
-        instantiateAttempt(self, other);
+        if (other != null && !other.hasPhysicsBody()) return;
+        if (rustHandle != 0 && (other == null || epochSeen == other.getBodyEpoch())) return;
+        if (self.ticksExisted < retryAfterTick) return;
+        tryInstantiate(self, other);
     }
 
-    private boolean endpointMissing(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
-        return !self.hasColliders() || (other == null ? anchorTag == 0 : !other.hasColliders());
-    }
-
-    private boolean waitingForBody(@Nullable PhysicsWorldEntity other) {
-        return other != null && !other.hasPhysicsBody();
-    }
-
-    private boolean handleCurrent(@Nullable PhysicsWorldEntity other) {
-        return rustHandle != 0 && (other == null || epochSeen == other.getBodyEpoch());
-    }
-
-    private void instantiateAttempt(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
+    private void tryInstantiate(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
         teardown(self.getEntityWorld());
-        if (instantiate(self, other)) {
+        var wire = buildWire(self, other);
+        var otherTag = other == null ? anchorTag : other.getEntityId();
+        var handle = Rapier.addJoint(self.getEntityWorld(), self.getEntityId(), otherTag, wire.flags(), wire.data());
+        if (handle != 0) {
+            rustHandle = handle;
+            epochSeen = other == null ? 0 : other.getBodyEpoch();
             retryAfterTick = 0;
             instantiateFailures = 0;
             return;
@@ -242,15 +220,20 @@ public final class PhysicsConstraint {
         }
     }
 
-    @Nullable private PhysicsWorldEntity resolveEntityEndpoint(PhysicsWorldEntity self) {
+    @Nullable private PhysicsWorldEntity resolveBody(PhysicsWorldEntity self) {
+        if (otherEndpoint == null) return null;
         if (otherEndpoint.equals(self.getUniqueID())) {
             dead = true;
             SusyLog.logger.warn("dropping self-referential constraint toward {}", otherEndpoint);
             return null;
         }
-        PhysicsWorldEntity other = resolveEndpoint(self.getEntityWorld(), otherEndpoint);
+        var other = resolveEndpoint(self.getEntityWorld(), otherEndpoint);
         if (other == null) {
-            noteMiss();
+            consecutiveMisses = Math.min(consecutiveMisses + 1, MISS_WARN_TICKS);
+            if (consecutiveMisses == MISS_WARN_TICKS) {
+                SusyLog.logger.warn("constraint endpoint {} unresolved for {} ticks, staying pending",
+                        otherEndpoint, consecutiveMisses);
+            }
             return null;
         }
         consecutiveMisses = 0;
@@ -262,20 +245,12 @@ public final class PhysicsConstraint {
         return other;
     }
 
-    private void noteMiss() {
-        consecutiveMisses = Math.min(consecutiveMisses + 1, MISS_WARN_TICKS);
-        if (consecutiveMisses == MISS_WARN_TICKS) {
-            SusyLog.logger.warn("constraint endpoint {} unresolved for {} ticks, staying pending", otherEndpoint,
-                    consecutiveMisses);
-        }
-    }
-
     @Nullable public static PhysicsWorldEntity resolveEndpoint(World world, UUID uuid) {
         Entity entity = null;
         if (world instanceof WorldServer) {
             entity = ((WorldServer) world).getEntityFromUuid(uuid);
         } else {
-            for (Entity loaded : world.loadedEntityList) {
+            for (var loaded : world.loadedEntityList) {
                 if (uuid.equals(loaded.getUniqueID())) {
                     entity = loaded;
                     break;
@@ -285,47 +260,31 @@ public final class PhysicsConstraint {
         return entity instanceof PhysicsWorldEntity ? (PhysicsWorldEntity) entity : null;
     }
 
-    private boolean instantiate(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
-        JointWire wire = buildWire(self, other);
-        int otherTag = other == null ? anchorTag : other.getEntityId();
-        long handle = Rapier.addJoint(self.getEntityWorld(), self.getEntityId(), otherTag, wire.flags(), wire.data());
-        if (handle == 0) {
-            return false;
-        }
-        rustHandle = handle;
-        epochSeen = other == null ? 0 : other.getBodyEpoch();
-        return true;
-    }
-
     private JointWire buildWire(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
-        JointWire wire = new JointWire(mask(lockedAxes), mask(coupledAxes), contactsEnabled);
-        Vec3d restOffset = formationRestOffset(self, other);
-        for (Map.Entry<Axis, AxisState> entry : axes.entrySet()) {
+        var wire = new JointWire(mask(lockedAxes), mask(coupledAxes), contactsEnabled);
+        var restOffset = formationRestOffset(self, other);
+        for (var entry : axes.entrySet()) {
             if (lockedAxes.contains(entry.getKey())) continue;
-            writeAxisState(wire, entry.getKey(), entry.getValue(), restOffset);
+            var axis = entry.getKey();
+            var s = entry.getValue();
+            if (s.limitMin != null) wire.limit(axis, s.limitMin, s.limitMax);
+            if (s.motor != null) {
+                var m = s.motor;
+                var targetPos = m.spring ? (Axis.LINEAR.contains(axis) ? linearComponent(restOffset, axis) : 0.0)
+                        : m.targetPos;
+                wire.motor(axis, targetPos, m.targetVel, m.stiffness, m.damping, m.maxForce, m.forceBased);
+            }
         }
         wire.frameA(anchorCenter(anchorSelfBlock).subtract(self.getRotationPoint()));
-        Vec3d frameB = other == null ?
-                self.worldPointFromLocal(anchorCenter(anchorSelfBlock)).subtract(anchorCenter(anchorOtherBlock)) :
-                anchorCenter(anchorOtherBlock).subtract(other.getRotationPoint());
+        var frameB = other == null
+                ? self.worldPointFromLocal(anchorCenter(anchorSelfBlock)).subtract(anchorCenter(anchorOtherBlock))
+                : anchorCenter(anchorOtherBlock).subtract(other.getRotationPoint());
         wire.frameB(frameB);
         return wire;
     }
 
-    private static void writeAxisState(JointWire wire, Axis axis, AxisState state, Vec3d restOffset) {
-        if (state.limitMin != null) {
-            wire.limit(axis, state.limitMin, state.limitMax);
-        }
-        if (state.motor == null) return;
-        Motor motor = state.motor;
-        double targetPos = motor.spring ? (Axis.LINEAR.contains(axis) ? component(restOffset, axis) : 0.0) :
-                motor.targetPos;
-        wire.motor(axis, targetPos, motor.targetVel, motor.stiffness, motor.damping, motor.maxForce,
-                motor.forceBased);
-    }
-
     public void writeToNBT(NBTTagCompound tag) {
-        if (staticEndpoint) {
+        if (otherEndpoint == null) {
             tag.setBoolean("AnchorStatic", true);
         } else {
             tag.setLong("OtherMost", otherEndpoint.getMostSignificantBits());
@@ -340,37 +299,33 @@ public final class PhysicsConstraint {
         tag.setInteger("AnchorOtherY", anchorOtherBlock.getY());
         tag.setInteger("AnchorOtherZ", anchorOtherBlock.getZ());
         tag.setBoolean("ContactsEnabled", contactsEnabled);
-        NBTTagList axisList = new NBTTagList();
-        for (Map.Entry<Axis, AxisState> entry : axes.entrySet()) {
-            NBTTagCompound axisTag = new NBTTagCompound();
+        var list = new NBTTagList();
+        for (var entry : axes.entrySet()) {
+            var axisTag = new NBTTagCompound();
             axisTag.setByte("Axis", (byte) entry.getKey().index());
-            writeAxisNBT(axisTag, entry.getValue());
-            axisList.appendTag(axisTag);
+            var s = entry.getValue();
+            if (s.limitMin != null) {
+                axisTag.setDouble("LimitMin", s.limitMin);
+                axisTag.setDouble("LimitMax", s.limitMax);
+            }
+            if (s.motor != null) {
+                var m = s.motor;
+                axisTag.setDouble("TargetPos", m.targetPos);
+                axisTag.setDouble("TargetVel", m.targetVel);
+                axisTag.setDouble("Stiffness", m.stiffness);
+                axisTag.setDouble("Damping", m.damping);
+                axisTag.setDouble("MaxForce", m.maxForce);
+                axisTag.setBoolean("ForceBased", m.forceBased);
+                axisTag.setBoolean("Spring", m.spring);
+            }
+            list.appendTag(axisTag);
         }
-        tag.setTag("Axes", axisList);
-    }
-
-    private static void writeAxisNBT(NBTTagCompound axisTag, AxisState state) {
-        if (state.limitMin != null) {
-            axisTag.setDouble("LimitMin", state.limitMin);
-            axisTag.setDouble("LimitMax", state.limitMax);
-        }
-        if (state.motor == null) return;
-        Motor motor = state.motor;
-        axisTag.setDouble("TargetPos", motor.targetPos);
-        axisTag.setDouble("TargetVel", motor.targetVel);
-        axisTag.setDouble("Stiffness", motor.stiffness);
-        axisTag.setDouble("Damping", motor.damping);
-        axisTag.setDouble("MaxForce", motor.maxForce);
-        axisTag.setBoolean("ForceBased", motor.forceBased);
-        axisTag.setBoolean("Spring", motor.spring);
+        tag.setTag("Axes", list);
     }
 
     public static PhysicsConstraint readFromNBT(NBTTagCompound tag) {
-        boolean staticEndpoint = tag.getBoolean("AnchorStatic");
-        PhysicsConstraint constraint = new PhysicsConstraint(
-                staticEndpoint ? null : new UUID(tag.getLong("OtherMost"), tag.getLong("OtherLeast")));
-        constraint.staticEndpoint = staticEndpoint;
+        var constraint = new PhysicsConstraint(tag.getBoolean("AnchorStatic") ? null
+                : new UUID(tag.getLong("OtherMost"), tag.getLong("OtherLeast")));
         constraint.lockedAxes.addAll(axesFromMask(tag.getInteger("LockedAxes")));
         constraint.coupledAxes.addAll(axesFromMask(tag.getInteger("CoupledAxes")));
         constraint.anchorSelfBlock = new BlockPos(tag.getInteger("AnchorSelfX"), tag.getInteger("AnchorSelfY"),
@@ -378,46 +333,42 @@ public final class PhysicsConstraint {
         constraint.anchorOtherBlock = new BlockPos(tag.getInteger("AnchorOtherX"), tag.getInteger("AnchorOtherY"),
                 tag.getInteger("AnchorOtherZ"));
         constraint.contactsEnabled = tag.getBoolean("ContactsEnabled");
-        NBTTagList axisList = tag.getTagList("Axes", Constants.NBT.TAG_COMPOUND);
-        for (int i = 0; i < axisList.tagCount(); i++) {
-            NBTTagCompound axisTag = axisList.getCompoundTagAt(i);
-            if (!axisTag.hasKey("Axis", Constants.NBT.TAG_BYTE)) {
-                continue;
+        var list = tag.getTagList("Axes", Constants.NBT.TAG_COMPOUND);
+        var allAxes = Axis.values();
+        for (var i = 0; i < list.tagCount(); i++) {
+            var axisTag = list.getCompoundTagAt(i);
+            if (!axisTag.hasKey("Axis", Constants.NBT.TAG_BYTE)) continue;
+            var idx = (int) axisTag.getByte("Axis");
+            if (idx < 0 || idx >= allAxes.length) continue;
+            var s = constraint.state(allAxes[idx]);
+            if (axisTag.hasKey("LimitMin")) {
+                var min = axisTag.getDouble("LimitMin");
+                var max = axisTag.getDouble("LimitMax");
+                if (Double.isFinite(min) && Double.isFinite(max) && min <= max) {
+                    s.limitMin = min;
+                    s.limitMax = max;
+                }
             }
-            int index = axisTag.getByte("Axis");
-            if (index < 0 || index >= Axis.values().length) {
-                continue;
+            if (axisTag.hasKey("Stiffness")) {
+                var tp = axisTag.getDouble("TargetPos");
+                var tv = axisTag.getDouble("TargetVel");
+                var st = axisTag.getDouble("Stiffness");
+                var da = axisTag.getDouble("Damping");
+                var mf = axisTag.getDouble("MaxForce");
+                if (finiteMotor(tp, tv, st, da, mf)) {
+                    var m = Motor.of(tp, tv, st, da, mf, axisTag.getBoolean("ForceBased"));
+                    m.spring = axisTag.getBoolean("Spring");
+                    s.motor = m;
+                }
             }
-            readAxisNBT(axisTag, constraint.state(Axis.values()[index]));
         }
         return constraint;
     }
 
-    private static void readAxisNBT(NBTTagCompound axisTag, AxisState state) {
-        if (axisTag.hasKey("LimitMin")) {
-            double limitMin = axisTag.getDouble("LimitMin");
-            double limitMax = axisTag.getDouble("LimitMax");
-            if (Double.isFinite(limitMin) && Double.isFinite(limitMax) && limitMin <= limitMax) {
-                state.limitMin = limitMin;
-                state.limitMax = limitMax;
-            }
-        }
-        if (!axisTag.hasKey("Stiffness")) return;
-        double targetPos = axisTag.getDouble("TargetPos");
-        double targetVel = axisTag.getDouble("TargetVel");
-        double stiffness = axisTag.getDouble("Stiffness");
-        double damping = axisTag.getDouble("Damping");
-        double maxForce = axisTag.getDouble("MaxForce");
-        if (!finiteMotor(targetPos, targetVel, stiffness, damping, maxForce)) return;
-        Motor motor = Motor.of(targetPos, targetVel, stiffness, damping, maxForce, axisTag.getBoolean("ForceBased"));
-        motor.spring = axisTag.getBoolean("Spring");
-        state.motor = motor;
-    }
-
     public static void writeConstraints(List<PhysicsConstraint> constraints, NBTTagCompound tag) {
-        NBTTagList list = new NBTTagList();
-        for (PhysicsConstraint constraint : constraints) {
-            NBTTagCompound entry = new NBTTagCompound();
+        var list = new NBTTagList();
+        for (var constraint : constraints) {
+            var entry = new NBTTagCompound();
             constraint.writeToNBT(entry);
             list.appendTag(entry);
         }
@@ -425,71 +376,47 @@ public final class PhysicsConstraint {
     }
 
     public static List<PhysicsConstraint> readConstraints(NBTTagCompound tag) {
-        List<PhysicsConstraint> constraints = new ArrayList<>();
+        var constraints = new ArrayList<PhysicsConstraint>();
         if (tag.hasKey("Constraints", Constants.NBT.TAG_LIST)) {
-            NBTTagList list = tag.getTagList("Constraints", Constants.NBT.TAG_COMPOUND);
-            for (int i = 0; i < list.tagCount(); i++) {
+            var list = tag.getTagList("Constraints", Constants.NBT.TAG_COMPOUND);
+            for (var i = 0; i < list.tagCount(); i++) {
                 constraints.add(readFromNBT(list.getCompoundTagAt(i)));
             }
         }
         return constraints;
     }
 
+    public static Vec3d anchorCenter(BlockPos anchorBlock) {
+        return new Vec3d(anchorBlock).add(BLOCK_CENTER_OFFSET, BLOCK_CENTER_OFFSET, BLOCK_CENTER_OFFSET);
+    }
+
     private static EnumSet<Axis> rotationAxes(boolean x, boolean y, boolean z) {
-        EnumSet<Axis> axes = EnumSet.noneOf(Axis.class);
-        if (x) {
-            axes.add(Axis.ANG_X);
-        }
-        if (y) {
-            axes.add(Axis.ANG_Y);
-        }
-        if (z) {
-            axes.add(Axis.ANG_Z);
-        }
+        var axes = EnumSet.noneOf(Axis.class);
+        if (x) axes.add(Axis.ANG_X);
+        if (y) axes.add(Axis.ANG_Y);
+        if (z) axes.add(Axis.ANG_Z);
         return axes;
     }
 
     private static EnumSet<Axis> axesFromMask(int mask) {
-        EnumSet<Axis> axes = EnumSet.noneOf(Axis.class);
-        for (Axis axis : Axis.values()) {
-            if ((mask & axis.mask()) != 0) {
-                axes.add(axis);
-            }
+        var axes = EnumSet.noneOf(Axis.class);
+        for (var axis : Axis.values()) {
+            if ((mask & axis.mask()) != 0) axes.add(axis);
         }
         return axes;
     }
 
     private static int mask(EnumSet<Axis> axes) {
-        int mask = 0;
-        for (Axis axis : axes) {
-            mask |= axis.mask();
-        }
-        return mask;
+        var m = 0;
+        for (var axis : axes) m |= axis.mask();
+        return m;
     }
 
-    private static double component(Vec3d vector, Axis axis) {
-        switch (axis) {
-            case LIN_X:
-                return vector.x;
-            case LIN_Y:
-                return vector.y;
-            case LIN_Z:
-                return vector.z;
-            default:
-                return 0.0;
-        }
-    }
-
-    public static Vec3d anchorCenter(BlockPos anchorBlock) {
-        return new Vec3d(anchorBlock).add(BLOCK_CENTER_OFFSET, BLOCK_CENTER_OFFSET, BLOCK_CENTER_OFFSET);
-    }
-
-    private boolean rejectLocked(Axis axis) {
-        if (!lockedAxes.contains(axis)) {
-            return false;
-        }
-        SusyLog.logger.warn("ignoring limit or motor on locked axis {}", axis);
-        return true;
+    private static double linearComponent(Vec3d v, Axis axis) {
+        if (axis == Axis.LIN_X) return v.x;
+        if (axis == Axis.LIN_Y) return v.y;
+        if (axis == Axis.LIN_Z) return v.z;
+        return 0.0;
     }
 
     private static void requireFiniteMotor(double targetPos, double targetVel, double stiffness, double damping,
@@ -503,18 +430,18 @@ public final class PhysicsConstraint {
 
     private static boolean finiteMotor(double targetPos, double targetVel, double stiffness, double damping,
                                        double maxForce) {
-        return Double.isFinite(targetPos) && Double.isFinite(targetVel) && Double.isFinite(stiffness) &&
-                Double.isFinite(damping) && Double.isFinite(maxForce);
+        return Double.isFinite(targetPos) && Double.isFinite(targetVel) && Double.isFinite(stiffness)
+                && Double.isFinite(damping) && Double.isFinite(maxForce);
     }
 
     private AxisState state(Axis axis) {
-        return axes.computeIfAbsent(axis, key -> new AxisState());
+        return axes.computeIfAbsent(axis, k -> new AxisState());
     }
 
     private Vec3d formationRestOffset(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
-        Vec3d otherCenter = other == null ? anchorCenter(anchorOtherBlock) :
-                other.worldPointFromLocal(anchorCenter(anchorOtherBlock));
-        Vec3d worldDelta = otherCenter.subtract(self.worldPointFromLocal(anchorCenter(anchorSelfBlock)));
-        return self.getRotation().conjugate().rotatePoint(worldDelta);
+        var otherCenter = other == null ? anchorCenter(anchorOtherBlock)
+                : other.worldPointFromLocal(anchorCenter(anchorOtherBlock));
+        return self.getRotation().conjugate()
+                .rotatePoint(otherCenter.subtract(self.worldPointFromLocal(anchorCenter(anchorSelfBlock))));
     }
 }

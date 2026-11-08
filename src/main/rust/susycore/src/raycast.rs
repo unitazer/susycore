@@ -1,14 +1,10 @@
-
 use jni::EnvUnowned;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JDoubleArray};
 use jni::sys::{jboolean, jdouble, jint, jlong};
 use rapier3d::math::Vec3;
 use rapier3d::parry::query::Ray;
-use rapier3d::prelude::{
-  ColliderHandle,
-  QueryFilter,
-};
+use rapier3d::prelude::{ColliderHandle, QueryFilter};
 
 use crate::scene::Scene;
 use crate::{EntityId, Real};

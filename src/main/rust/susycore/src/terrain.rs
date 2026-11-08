@@ -1,21 +1,17 @@
 use rapier3d::dynamics::SoftBodySet;
 use rapier3d::math::Vec3;
 use rapier3d::prelude::{
-  ActiveEvents, ColliderBuilder, ColliderHandle, ColliderSet, IslandManager, RigidBodySet,
-  SharedShape,
+  ColliderBuilder, ColliderHandle, ColliderSet, IslandManager, RigidBodySet,
 };
 use std::collections::HashMap;
 
 use crate::Real;
 use crate::block_collisions::BlockColliderInfoHandle;
 use crate::chunklet::Chunklet;
-use crate::contact_forces::CONTACT_FORCE_EVENT_THRESHOLD;
 
-//the minecraft world is (6*10^7)^2 * 256 blocks which is ~60^2 so it can be packed
 #[derive(Debug, Hash, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
 pub struct PackedChunkletCoords(u64);
 impl PackedChunkletCoords {
-  //chunk space
   #[inline(always)]
   pub fn from_xyz(x: i32, y: u8, z: i32) -> Self {
     Self::try_from_xyz(x, y as i32, z).expect("chunklet coords out of range")
@@ -59,7 +55,7 @@ pub const CHUNK_SIDE_LOG2: usize = CHUNK_SIDE.ilog2() as usize;
 pub const CHUNK_VOLUME: usize = CHUNK_SIDE.pow(3);
 
 pub struct TerrainData {
-  pub colliders: HashMap<PackedChunkletCoords, ColliderHandle>,
+  pub chunks: HashMap<PackedChunkletCoords, (Chunklet, ColliderHandle)>,
 }
 
 impl Default for TerrainData {
@@ -71,16 +67,10 @@ impl Default for TerrainData {
 impl TerrainData {
   pub fn new() -> Self {
     Self {
-      colliders: HashMap::new(),
+      chunks: HashMap::new(),
     }
   }
 
-  fn collider_for(&self, x: i32, y: u8, z: i32) -> Option<ColliderHandle> {
-    self
-      .colliders
-      .get(&PackedChunkletCoords::from_xyz(x, y, z))
-      .copied()
-  }
   #[allow(clippy::too_many_arguments)]
   pub fn update(
     &mut self,
@@ -96,31 +86,32 @@ impl TerrainData {
     bodies: &mut RigidBodySet,
     softbodies: &mut SoftBodySet,
   ) {
-    let Some(handle) = self.collider_for(cx, cy, cz) else {
+    let coords = PackedChunkletCoords::from_xyz(cx, cy, cz);
+    let Some((chunk, handle)) = self.chunks.get_mut(&coords) else {
       log::debug!("no chunk at {cx} {cy} {cz}");
       return;
     };
-
-    let value = new.into_block();
-    let removed = {
-      let Some(chunk) = colliders
-        .get_mut(handle)
-        .and_then(|c| c.shape_mut().as_shape_mut::<Chunklet>())
-      else {
-        log::error!("chunk collider {handle:?} is not a Chunklet");
-        return;
-      };
-      chunk.set(x, y, z, value);
-      chunk.count() == 0
-    };
-
-    if removed {
-      self
-        .colliders
-        .remove(&PackedChunkletCoords::from_xyz(cx, cy, cz));
+    let handle = *handle;
+    let colliders_store = &*crate::block_collisions::COLLIDERS.read().unwrap();
+    let outcome = chunk.set(x, y, z, new.into_block(), colliders_store);
+    if !outcome.changed {
+      return;
+    }
+    if outcome.emptied {
+      self.chunks.remove(&coords);
+      colliders.remove(handle, islands, bodies, softbodies, true);
+      return;
+    }
+    if let Some(shape) = chunk.compose() {
+      if let Some(co) = colliders.get_mut(handle) {
+        co.set_shape(shape);
+      }
+    } else {
+      self.chunks.remove(&coords);
       colliders.remove(handle, islands, bodies, softbodies, true);
     }
   }
+
   pub fn remove(
     &mut self,
     x: i32,
@@ -131,36 +122,47 @@ impl TerrainData {
     bodies: &mut RigidBodySet,
     softbodies: &mut SoftBodySet,
   ) {
-    if let Some(handle) = self
-      .colliders
-      .remove(&PackedChunkletCoords::from_xyz(x, y, z))
-    {
+    let coords = PackedChunkletCoords::from_xyz(x, y, z);
+    if let Some((_, handle)) = self.chunks.remove(&coords) {
       colliders.remove(handle, islands, bodies, softbodies, true);
     }
   }
+
   pub fn put(
     &mut self,
     x: i32,
     y: u8,
     z: i32,
-    c: Chunklet,
+    mut c: Chunklet,
     colliders: &mut ColliderSet,
-  ) -> ColliderHandle {
+    islands: &mut IslandManager,
+    bodies: &mut RigidBodySet,
+    softbodies: &mut SoftBodySet,
+  ) -> Option<ColliderHandle> {
+    let coords = PackedChunkletCoords::from_xyz(x, y, z);
+    let Some(shape) = c.compose() else {
+      log::warn!(
+        "chunklet {x} {y} {z} compose() returned None (count={} cubes={} has_voxels={})",
+        c.count(),
+        c.cube_count,
+        c.voxels.is_some()
+      );
+      return None;
+    };
+    if let Some((_, old)) = self.chunks.remove(&coords) {
+      colliders.remove(old, islands, bodies, softbodies, true);
+    }
     let handle = colliders.insert(
-      ColliderBuilder::new(SharedShape::new(c))
+      ColliderBuilder::new(shape)
         .translation(Vec3::new(
           (x * 16) as Real,
           (y * 16) as Real,
           (z * 16) as Real,
         ))
-        .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
-        .contact_force_event_threshold(CONTACT_FORCE_EVENT_THRESHOLD)
         .build(),
     );
-    self
-      .colliders
-      .insert(PackedChunkletCoords::from_xyz(x, y, z), handle);
-    handle
+    self.chunks.insert(coords, (c, handle));
+    Some(handle)
   }
 }
 
