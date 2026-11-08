@@ -22,7 +22,7 @@ import supersymmetry.api.phys.UnformFlow;
 
 public class TestingBarrelMTE extends MultiblockWithDisplayBase {
 
-    private static final int BARREL_LENGTH = 9;
+    private static final int BARREL_LENGTH = 100;
 
     public TestingBarrelMTE(ResourceLocation res) {
         super(res);
@@ -35,8 +35,8 @@ public class TestingBarrelMTE extends MultiblockWithDisplayBase {
 
     @Override
     protected @NotNull BlockPattern createStructurePattern() {
-        final double outerDiameter = 10.0D;
-        final double innerRadius = 1.5D;
+        final double outerDiameter = 9.5D;
+        final double innerRadius = 1.6D;
 
         final int size = (int) outerDiameter + 1;
         final double center = (size - 1) / 2.0D;
