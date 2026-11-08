@@ -35,7 +35,7 @@ public class TestingBarrelMTE extends MultiblockWithDisplayBase {
 
     @Override
     protected @NotNull BlockPattern createStructurePattern() {
-        final double outerDiameter = 9.5D;
+        final double outerDiameter = 9.6D;
         final double innerRadius = 1.6D;
 
         final int size = (int) outerDiameter + 1;

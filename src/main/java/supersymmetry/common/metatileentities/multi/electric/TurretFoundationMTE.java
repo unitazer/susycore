@@ -48,7 +48,7 @@ public class TurretFoundationMTE extends MultiblockWithDisplayBase {
     private static final double AIM_DRIVE_DAMPING = 80.0;
     private static final double AIM_TORQUE = 150.0;
     private static final float AIM_DEAD_ZONE = 0.02f;
-    private static final int GUN_OFFSET_Y = 3;
+    private static final int GUN_OFFSET_Y = 12;
     private static final int GUN_GRACE_TICKS = 100;
 
     @Nullable private UUID gunId;
