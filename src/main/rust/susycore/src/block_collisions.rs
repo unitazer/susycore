@@ -284,7 +284,7 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
   }
 
   Scene::with_scene_mut(world_id as usize, |xs| {
-    xs.terrain.update(
+    if !xs.terrain.update(
       cx,
       cy as u8,
       cz,
@@ -296,7 +296,9 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_partialSubchunkUpdate(
       &mut xs.world.islands,
       &mut xs.world.bodies,
       &mut xs.world.soft_bodies,
-    );
+    ) {
+      return;
+    }
 
     let block_world_x = (cx * 16 + x) as f32;
     let block_world_y = (cy * 16 + y) as f32;

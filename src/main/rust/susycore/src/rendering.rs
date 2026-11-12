@@ -116,9 +116,9 @@ mod imp {
   }
 
   impl DebugRenderBackend for GlBackend {
-    fn filter_object(&self, object: DebugRenderObject) -> bool {
-      match object {
-        // DebugRenderObject::Collider(_, co) => co.parent().is_some(),
+    fn filter_object(&self, _object: DebugRenderObject) -> bool {
+      match _object {
+        DebugRenderObject::Collider(_, y) => y.parent().is_some(),
         _ => true,
       }
     }
@@ -130,14 +130,18 @@ mod imp {
       to: rapier3d::prelude::Vector,
       color: rapier3d::prelude::DebugColor,
     ) {
-      self.vertices.extend([from.x, from.y, from.z, to.x, to.y, to.z]);
+      self
+        .vertices
+        .extend([from.x, from.y, from.z, to.x, to.y, to.z]);
       let mut hsla = color;
       hsla[1] *= 255.0;
       hsla[2] *= 255.0;
       let hsl: AlphaColor<Hsl> = AlphaColor::new(hsla);
       let rgb: AlphaColor<Srgb> = hsl.convert();
       let rgba = rgb.components;
-      self.colors.extend([rgba[0], rgba[1], rgba[2], rgba[3], rgba[0], rgba[1], rgba[2], rgba[3]]);
+      self.colors.extend([
+        rgba[0], rgba[1], rgba[2], rgba[3], rgba[0], rgba[1], rgba[2], rgba[3],
+      ]);
     }
   }
 }

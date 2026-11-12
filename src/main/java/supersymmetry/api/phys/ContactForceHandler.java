@@ -8,6 +8,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;
 import supersymmetry.api.subworld.SubWorldPlot;
 
@@ -28,6 +29,9 @@ public final class ContactForceHandler {
     }
 
     private static double[] buffer = new double[64];
+    private static final Int2ObjectOpenHashMap<RigidPose> POSE_CACHE = new Int2ObjectOpenHashMap<>();
+    private static final RigidPose MISSING_POSE = new RigidPose(Vec3d.ZERO,
+            supersymmetry.api.util.Quaternion.IDENTITY, Vec3d.ZERO);
 
     private ContactForceHandler() {}
 
@@ -39,6 +43,8 @@ public final class ContactForceHandler {
         int worldId = Rapier.worldId(world);
         if (worldId < 0) return;
         int count = drain(worldId);
+        if (count <= 0) return;
+        POSE_CACHE.clear();
         for (int i = 0; i < count; i++) {
             int offset = i * DOUBLES_PER_EVENT;
             double force = buffer[offset];
@@ -49,6 +55,7 @@ public final class ContactForceHandler {
             processSide(world, force, tagA, pointA);
             processSide(world, force, tagB, pointB);
         }
+        POSE_CACHE.clear();
     }
 
     private static int drain(int worldId) {
@@ -80,8 +87,12 @@ public final class ContactForceHandler {
         if (!(entity instanceof PhysicsWorldEntity body)) return;
         SubWorldPlot plot = body.getPlot();
         if (plot == null) return;
-        RigidPose freshPose = Rapier.getBodyPose(world, tag);
-        if (freshPose == null) return;
+        RigidPose freshPose = POSE_CACHE.get(tag);
+        if (freshPose == null) {
+            freshPose = Rapier.getBodyPose(world, tag);
+            POSE_CACHE.put(tag, freshPose == null ? MISSING_POSE : freshPose);
+        }
+        if (freshPose == MISSING_POSE) return;
         RigidPose pose = new RigidPose(freshPose.position, freshPose.rotation, body.getRotationPoint());
         Vec3d localPoint = pose.plotLocalFromWorld(point);
         BlockPos local = new BlockPos(localPoint.x, localPoint.y, localPoint.z);

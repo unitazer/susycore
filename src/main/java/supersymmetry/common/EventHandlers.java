@@ -108,7 +108,7 @@ public class EventHandlers {
 
         World world = event.getWorld();
         if (!world.isRemote && !(world instanceof WorldServerMulti) && Native.ENABLED) {
-            Rapier.initialize_world(world, -10.0f, 0.0);
+            Rapier.initialize_world(world, 0.0f, 0.0);
             chunkSyncManagers.put((WorldServer) world, new ChunkSyncManager((WorldServer) world));
         }
 

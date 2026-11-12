@@ -101,7 +101,7 @@ impl Chunklet {
         coords.push(IVector::new(x as i32, y as i32, z as i32));
       }
     }
-    self.voxels = Some(Voxels::new(Vector::splat(1.0 as Real), &coords));
+    self.voxels = Some(Voxels::new(Vector::splat(1.0_f32), &coords));
   }
 
   fn cuboids_for_cell(
@@ -113,10 +113,12 @@ impl Chunklet {
     let cell = Vector::new(x as Real, y as Real, z as Real);
     boxes
       .iter()
-      .map(|aabb| (
-        Pose::from_translation(cell + aabb.center()),
-        SharedShape::new(Cuboid::new(aabb.half_extents())),
-      ))
+      .map(|aabb| {
+        (
+          Pose::from_translation(cell + aabb.center()),
+          SharedShape::new(Cuboid::new(aabb.half_extents())),
+        )
+      })
       .collect()
   }
 
@@ -135,7 +137,10 @@ impl Chunklet {
     let i = Self::index(x, y, z) as usize;
     let old = self.blocks[i];
     if old == value {
-      return SetOutcome { changed: false, emptied: self.block_count == 0 };
+      return SetOutcome {
+        changed: false,
+        emptied: self.block_count == 0,
+      };
     }
 
     let mut cubes_changed = false;
@@ -170,7 +175,10 @@ impl Chunklet {
     if cubes_changed {
       self.rebuild_voxels();
     }
-    SetOutcome { changed: true, emptied: self.block_count == 0 }
+    SetOutcome {
+      changed: true,
+      emptied: self.block_count == 0,
+    }
   }
 
   fn rebuild_composed(&mut self) {
@@ -182,7 +190,7 @@ impl Chunklet {
     }
     if self.cube_count > 0 && !has_non_cube {
       self.composed = Some(SharedShape::new(Voxels::new(
-        Vector::splat(1.0 as Real),
+        Vector::splat(1.0_f32),
         &self.cube_coords(),
       )));
       self.dirty = false;
@@ -190,10 +198,10 @@ impl Chunklet {
     }
     let mut children: Vec<(Pose, SharedShape)> = Vec::new();
     if self.cube_count > 0 {
-      children.push((Pose::identity(), SharedShape::new(Voxels::new(
-        Vector::splat(1.0 as Real),
-        &self.cube_coords(),
-      ))));
+      children.push((
+        Pose::identity(),
+        SharedShape::new(Voxels::new(Vector::splat(1.0_f32), &self.cube_coords())),
+      ));
     }
     for cell in self.non_cube.iter().flatten() {
       children.extend(cell.iter().cloned());
@@ -226,7 +234,9 @@ impl Chunklet {
 
   pub fn get(&self, x: u8, y: u8, z: u8) -> BlockColliderInfoHandle {
     BlockColliderInfoHandle(
-      self.blocks[Self::index(x, y, z) as usize].map(NonZeroU32::get).unwrap_or(0),
+      self.blocks[Self::index(x, y, z) as usize]
+        .map(NonZeroU32::get)
+        .unwrap_or(0),
     )
   }
 
@@ -237,6 +247,10 @@ impl Chunklet {
 
   #[inline(always)]
   pub fn index_decode(index: u16) -> (u8, u8, u8) {
-    ((index & 0xF) as u8, ((index >> 8) & 0xF) as u8, ((index >> 4) & 0xF) as u8)
+    (
+      (index & 0xF) as u8,
+      ((index >> 8) & 0xF) as u8,
+      ((index >> 4) & 0xF) as u8,
+    )
   }
 }

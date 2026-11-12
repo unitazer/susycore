@@ -87,6 +87,7 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
 
     private boolean bodyCreated;
     private int bodyEpoch;
+    private int bulkEdit;
     private final IntSet syncedSubchunks = new IntOpenHashSet();
     private final List<PhysicsConstraint> constraints = new ArrayList<>();
     private boolean clientContentDirty;
@@ -418,7 +419,32 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         syncedSubchunks.add(key);
     }
 
+    public void beginBulkEdit() {
+        bulkEdit++;
+    }
+
+    public void endBulkEdit() {
+        if (bulkEdit > 0) bulkEdit--;
+    }
+
+    public boolean isBulkEditing() {
+        return bulkEdit > 0;
+    }
+
+    public void finishBulkEdit() {
+        bulkEdit = 0;
+        if (bodyCreated && plot != null) {
+            for (Chunk chunk : plot.getLoadedChunks().values()) {
+                syncChunkToBody(chunk);
+            }
+        }
+        contentDirty = true;
+        refreshContentBounds();
+        despawnIfEmpty();
+    }
+
     public void syncPlotBlockToBody(BlockPos local) {
+        if (bulkEdit > 0) return;
         if (!bodyCreated) {
             despawnIfEmpty();
             return;
@@ -507,10 +533,10 @@ public class PhysicsWorldEntity extends Entity implements IEntityAdditionalSpawn
         ensurePlotCovers(global);
         local = plot.toLocal(global);
         global = plot.toGlobal(local);
-        IBlockState oldState = plot.getBlockState(global);
+        IBlockState oldState = bulkEdit > 0 ? null : plot.getBlockState(global);
         plot.setBlockState(global, state, tileData);
         syncPlotBlockToBody(local);
-        if (!world.isRemote && oldState != state) {
+        if (!world.isRemote && bulkEdit <= 0 && oldState != state) {
             SPacketBlockChange packet = new SPacketBlockChange(world, global);
             for (EntityPlayerMP player : getTrackingPlayers()) {
                 player.connection.sendPacket(packet);

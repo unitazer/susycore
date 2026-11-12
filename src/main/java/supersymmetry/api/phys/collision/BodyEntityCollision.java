@@ -416,11 +416,11 @@ public final class BodyEntityCollision {
             return pos.add(direction.scale(distance));
         }
         Vec3d normal = hitEntry.contactNormal(hitBlock, boxAt(entity, pos.add(direction.scale(allowed))));
-        if (normal.y > VERTICAL_NORMAL_THRESHOLD) {
-            recordGround(contact, normal, hitEntry.body);
-        } else if (normal.y < -VERTICAL_NORMAL_THRESHOLD) {
+        if (normal.y < -VERTICAL_NORMAL_THRESHOLD) {
             contact.ceilingNormal = normal;
-        } else if (allowStepUp) {
+        } else if (normal.y > VERTICAL_NORMAL_THRESHOLD) {
+            recordGround(contact, normal, hitEntry.body);
+        } else if (allowStepUp && normal.y <= 0.0) {
             double lift = tryStepUp(entity, pos, hitEntry, hitBlock, normal, entries, contact);
             if (lift >= 0.0) {
                 Vec3d stepped = pos.add(0.0, lift, 0.0).add(normal.scale(-STEP_CHECK_INCREMENT));
@@ -428,6 +428,8 @@ public final class BodyEntityCollision {
                 return clipAxis(entity, stepped, displacement, axis, entries, contact, false);
             }
             contact.wallNormal = normal;
+        } else if (normal.y > 0.0) {
+            recordGround(contact, normal, hitEntry.body);
         } else {
             contact.wallNormal = normal;
         }

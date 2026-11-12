@@ -114,22 +114,29 @@ public final class PhysicsBodyFormation {
                                           @Nullable LongSet regionBlocks) {
         World world = parent.getEntityWorld();
         SubWorldPlot parentPlot = parent.getPlot();
-        for (int x = localMin.getX(); x <= localMax.getX(); x++) {
-            for (int y = localMin.getY(); y <= localMax.getY(); y++) {
-                for (int z = localMin.getZ(); z <= localMax.getZ(); z++) {
-                    BlockPos parentLocal = new BlockPos(x, y, z);
-                    BlockPos global = parentPlot.toGlobal(parentLocal);
-                    IBlockState state = parentPlot.getBlockState(global);
-                    if (state.getBlock() == Blocks.AIR) continue;
-                    if (regionBlocks != null && !regionBlocks.contains(parentLocal.toLong())) continue;
-                    BlockStateInfo captured = parent.captureBlockState(global, state);
-                    BlockPos childLocal = toChildLocal(parentLocal, localMin);
-                    child.setPlotBlock(childLocal, captured.state, captured.tileData);
-                    BlockExtraDataRegistry.restore(world, captured.state.getBlock(),
-                            childPlot.toGlobal(childLocal), captured.extra);
-                    parent.setPlotBlock(parentLocal, Blocks.AIR.getDefaultState(), null);
+        parent.beginBulkEdit();
+        child.beginBulkEdit();
+        try {
+            for (int x = localMin.getX(); x <= localMax.getX(); x++) {
+                for (int y = localMin.getY(); y <= localMax.getY(); y++) {
+                    for (int z = localMin.getZ(); z <= localMax.getZ(); z++) {
+                        BlockPos parentLocal = new BlockPos(x, y, z);
+                        BlockPos global = parentPlot.toGlobal(parentLocal);
+                        IBlockState state = parentPlot.getBlockState(global);
+                        if (state.getBlock() == Blocks.AIR) continue;
+                        if (regionBlocks != null && !regionBlocks.contains(parentLocal.toLong())) continue;
+                        BlockStateInfo captured = parent.captureBlockState(global, state);
+                        BlockPos childLocal = toChildLocal(parentLocal, localMin);
+                        BlockPos childGlobal = childPlot.toGlobal(childLocal);
+                        childPlot.setBlockState(childGlobal, captured.state, captured.tileData);
+                        BlockExtraDataRegistry.restore(world, captured.state.getBlock(), childGlobal, captured.extra);
+                        parentPlot.setBlockState(global, Blocks.AIR.getDefaultState(), null);
+                    }
                 }
             }
+        } finally {
+            child.finishBulkEdit();
+            parent.finishBulkEdit();
         }
     }
 }

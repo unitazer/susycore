@@ -21,4 +21,10 @@ public enum Axis {
     public int mask() {
         return 1 << ordinal();
     }
+
+    public static int maskOf(Axis... axes) {
+        int mask = 0;
+        for (Axis a : axes) mask |= a.mask();
+        return mask;
+    }
 }

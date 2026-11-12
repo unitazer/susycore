@@ -13,7 +13,10 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 import org.jetbrains.annotations.Nullable;
 
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import supersymmetry.api.SusyLog;
 import supersymmetry.api.subworld.SubWorldAllocator;
 import supersymmetry.api.subworld.SubWorldRegistry;
@@ -46,14 +49,34 @@ public class ChunkSyncManager {
 
     private static List<AxisAlignedBB> aabbTmp = new ArrayList<>();
 
-    private static final int STALE_TICK_TIMEOUT = 80;
+    private static final int STALE_TICK_TIMEOUT = 600;
+    private static final int OUT_OF_REGION_GRACE_TICKS = 40;
     private static final int MAX_CACHED_SUBCHUNKS = 4096;
     private static final int MAX_HPAD_CHUNKS = 8;
     private static final int MAX_SYNC_RADIUS_CHUNKS = 12;
+    private static final double CRITICAL_GROW = 1.5;
+    private static final long SPECULATIVE_BUDGET_NANOS = 2_000_000L;
+
+    private static final class SubchunkTask {
+
+        final int cx, cy, cz;
+        boolean critical;
+
+        SubchunkTask(int cx, int cy, int cz, boolean critical) {
+            this.cx = cx;
+            this.cy = cy;
+            this.cz = cz;
+            this.critical = critical;
+        }
+    }
 
     private final Long2ObjectOpenHashMap<Ticket> tickets = new Long2ObjectOpenHashMap<>();
     private final Long2ObjectOpenHashMap<CachedSubchunk> cached = new Long2ObjectOpenHashMap<>();
     private final WorldServer world;
+    private int bulkDepth;
+    private final LongOpenHashSet bulkTouched = new LongOpenHashSet();
+    private final List<SubchunkTask> tasks = new ArrayList<>();
+    private final Long2IntOpenHashMap planned = new Long2IntOpenHashMap();
 
     public ChunkSyncManager(WorldServer world) {
         this.world = world;
@@ -61,6 +84,40 @@ public class ChunkSyncManager {
 
     private static long key(int x, int y, int z) {
         return ((long) (x & 0xFFFFFF) << 40) | ((long) (y & 0xF) << 36) | ((long) (z & 0xFFFFFF));
+    }
+
+    private static int keyX(long k) {
+        int v = (int) ((k >>> 40) & 0xFFFFFF);
+        return (v & 0x800000) != 0 ? v | 0xFF000000 : v;
+    }
+
+    private static int keyY(long k) {
+        return (int) ((k >>> 36) & 0xF);
+    }
+
+    private static int keyZ(long k) {
+        int v = (int) (k & 0xFFFFFF);
+        return (v & 0x800000) != 0 ? v | 0xFF000000 : v;
+    }
+
+    public void beginBulk() {
+        bulkDepth++;
+    }
+
+    public void endBulk() {
+        if (bulkDepth <= 0) return;
+        if (--bulkDepth == 0 && !bulkTouched.isEmpty()) {
+            Integer worldIdObj = Rapier.initializedWorlds.get(world);
+            if (worldIdObj != null) {
+                int worldId = worldIdObj;
+                LongIterator it = bulkTouched.iterator();
+                while (it.hasNext()) {
+                    long k = it.nextLong();
+                    resyncSubchunk(worldId, keyX(k), keyY(k), keyZ(k));
+                }
+            }
+            bulkTouched.clear();
+        }
     }
 
     public void update() {
@@ -84,116 +141,214 @@ public class ChunkSyncManager {
             }
         }
 
+        tasks.clear();
+        planned.clear();
+        planned.defaultReturnValue(-1);
         PooledMutableBlockPos pos = PooledMutableBlockPos.retain();
         long start = System.nanoTime();
         int bodies = 0;
-        int iters = 0;
-        int fullScans = 0;
-        int cachedAdds = 0;
         try {
-            List<AbstractPhysicsEntity> ents = Rapier.entities;
-            for (int i = 0, len = ents.size(); i < len; i++) {
-                AbstractPhysicsEntity entity = ents.get(i);
-
+            for (AbstractPhysicsEntity entity : Rapier.entities) {
                 AxisAlignedBB bb = entity.getEntityBoundingBox();
                 if (bb == null) {
                     throw new RuntimeException("AbstractPhysicsEntity has a null aabb");
                 }
-
                 bodies++;
-                iters += syncTerrainAround(bb, entity.motionX, entity.motionY, entity.motionZ, worldId, pos);
+                collectTerrainTasks(bb, entity.motionX, entity.motionY, entity.motionZ);
             }
-            for (PhysicsWorldEntity entity : PhysicsWorldEntity.activeBodies()) {
-                if (entity.getEntityWorld() != world || entity.getPlot() == null) continue;
+            // stream() now; parallelStream() later if per-body collect is made pure/thread-safe
+            PhysicsWorldEntity.activeBodies().forEach(entity -> {
+                if (entity.getEntityWorld() != world || entity.getPlot() == null) return;
                 AxisAlignedBB bb = entity.getEntityBoundingBox();
-                if (bb == null) continue;
-                bodies++;
-                iters += syncTerrainAround(bb, entity.motionX, entity.motionY, entity.motionZ, worldId, pos);
+                if (bb == null) return;
+                collectTerrainTasks(bb, entity.motionX, entity.motionY, entity.motionZ);
+            });
+            for (PhysicsWorldEntity entity : PhysicsWorldEntity.activeBodies()) {
+                if (entity.getEntityWorld() == world && entity.getPlot() != null &&
+                        entity.getEntityBoundingBox() != null)
+                    bodies++;
+            }
+
+            applyTasks(worldId, pos, gameTime, start);
+
+            var oit = tickets.long2ObjectEntrySet().fastIterator();
+            while (oit.hasNext()) {
+                var e = oit.next();
+                Ticket t = e.getValue();
+                if (planned.get(e.getLongKey()) < 0 &&
+                        gameTime - t.lastInhabitedTick > OUT_OF_REGION_GRACE_TICKS) {
+                    Rapier.removeChunk(worldId, t.x, t.y, t.z);
+                    oit.remove();
+                    chunksRemovedThisTick++;
+                }
             }
         } finally {
             pos.release();
         }
-        fullScans = fullScansAdded;
-        cachedAdds = cachedAddsThisTick;
+        int fullScans = fullScansAdded;
+        int cachedAdds = cachedAddsThisTick;
+        int speculativeSkipped = speculativeSkippedThisTick;
+        int removed = chunksRemovedThisTick;
         cachedAddsThisTick = 0;
         fullScansAdded = 0;
+        speculativeSkippedThisTick = 0;
+        chunksRemovedThisTick = 0;
         double ms = (System.nanoTime() - start) / 1e6;
-        if (ms > 5 || staleRemoved > 0 || fullScans > 0) {
-            SusyLog.logger.info("bodies={} legacyTickets={} iters={} stale={} fullScans={} cachedAdds={} took={} ms",
-                    bodies, tickets.size(), iters, staleRemoved, fullScans, cachedAdds, ms);
+        if (ms > 20) {
+            SusyLog.logger.warn(
+                    "chunk sync slow: bodies={} tickets={} tasks={} stale={} oob={} fullScans={} cachedAdds={} specSkip={} took={} ms",
+                    bodies, tickets.size(), tasks.size(), staleRemoved, removed, fullScans, cachedAdds,
+                    speculativeSkipped, ms);
+        } else if (SusyLog.logger.isDebugEnabled()) {
+            SusyLog.logger.debug(
+                    "bodies={} tickets={} tasks={} stale={} oob={} fullScans={} cachedAdds={} specSkip={} took={} ms",
+                    bodies, tickets.size(), tasks.size(), staleRemoved, removed, fullScans, cachedAdds,
+                    speculativeSkipped, ms);
         }
     }
 
-    private int syncTerrainAround(AxisAlignedBB bb, double motionX, double motionY, double motionZ, int worldId,
-                                  PooledMutableBlockPos pos) {
-        int iters = 0;
-        long gameTime = world.getTotalWorldTime();
-        bb = bb.union(bb.offset(motionX, motionY, motionZ));
-        bb = bb.grow(1.0);
+    private void collectTerrainTasks(AxisAlignedBB bb, double motionX, double motionY, double motionZ) {
+        AxisAlignedBB swept = bb.union(bb.offset(motionX, motionY, motionZ));
+        AxisAlignedBB criticalBox = swept.grow(CRITICAL_GROW);
+        AxisAlignedBB marginBox = swept.grow(1.0);
 
         double hSpeed = Math.max(Math.abs(motionX), Math.abs(motionZ)) / 16.0;
-
         int hPad = Math.min((int) Math.ceil(hSpeed * 1.3), MAX_HPAD_CHUNKS);
         int vPad = Math.min((int) Math.ceil((Math.abs(motionY) / 16.0) * 1.5), 4);
-        int centerCX = MathHelper.floor((bb.minX + bb.maxX) * 0.03125);
-        int centerCZ = MathHelper.floor((bb.minZ + bb.maxZ) * 0.03125);
-        int minCX = Math.max(MathHelper.floor(bb.minX / 16.0) - hPad, centerCX - MAX_SYNC_RADIUS_CHUNKS);
-        int maxCX = Math.min(MathHelper.ceil(bb.maxX / 16.0) + hPad, centerCX + MAX_SYNC_RADIUS_CHUNKS);
-        int minCY = MathHelper.clamp(MathHelper.floor(bb.minY / 16.0) - vPad, 0, 15);
-        int maxCY = MathHelper.clamp(MathHelper.ceil(bb.maxY / 16.0) + vPad, 0, 15);
-        int minCZ = Math.max(MathHelper.floor(bb.minZ / 16.0) - hPad, centerCZ - MAX_SYNC_RADIUS_CHUNKS);
-        int maxCZ = Math.min(MathHelper.ceil(bb.maxZ / 16.0) + hPad, centerCZ + MAX_SYNC_RADIUS_CHUNKS);
+        int centerCX = MathHelper.floor((marginBox.minX + marginBox.maxX) * 0.03125);
+        int centerCZ = MathHelper.floor((marginBox.minZ + marginBox.maxZ) * 0.03125);
+        int minCX = Math.max(MathHelper.floor(marginBox.minX / 16.0) - hPad, centerCX - MAX_SYNC_RADIUS_CHUNKS);
+        int maxCX = Math.min(MathHelper.ceil(marginBox.maxX / 16.0) + hPad, centerCX + MAX_SYNC_RADIUS_CHUNKS);
+        int minCY = MathHelper.clamp(MathHelper.floor(marginBox.minY / 16.0) - vPad, 0, 15);
+        int maxCY = MathHelper.clamp(MathHelper.ceil(marginBox.maxY / 16.0) + vPad, 0, 15);
+        int minCZ = Math.max(MathHelper.floor(marginBox.minZ / 16.0) - hPad, centerCZ - MAX_SYNC_RADIUS_CHUNKS);
+        int maxCZ = Math.min(MathHelper.ceil(marginBox.maxZ / 16.0) + hPad, centerCZ + MAX_SYNC_RADIUS_CHUNKS);
+
+        // collected sequentially now; can be produced per-body and merged if collect is parallelized
         for (int cx = minCX; cx <= maxCX; cx++) {
             for (int cz = minCZ; cz <= maxCZ; cz++) {
                 if (isPlotOrHeapChunk(cx, cz)) continue;
                 Chunk chunk = world.getChunkProvider().getLoadedChunk(cx, cz);
                 if (chunk == null || !chunk.isLoaded()) continue;
                 for (int sy = minCY; sy <= maxCY; sy++) {
-                    iters++;
                     long k = key(cx, sy, cz);
-                    Ticket existing = tickets.get(k);
-                    if (existing != null && sy < chunk.storageArrays.length) {
-                        ExtendedBlockStorage storage = chunk.storageArrays[sy];
-                        if (storage != null) {
-                            CachedSubchunk cachedSub = cached.get(k);
-                            if (cachedSub != null && cachedSub.storage == storage) {
-                                existing.lastInhabitedTick = gameTime;
-                                continue;
-                            }
-                        }
-                        Rapier.removeChunk(worldId, existing.x, existing.y, existing.z);
-                        tickets.remove(k);
+                    boolean critical = intersectsSubchunk(criticalBox, cx, sy, cz);
+                    int prev = planned.get(k);
+                    if (prev >= 0) {
+                        if (critical) tasks.get(prev).critical = true;
+                        continue;
                     }
-                    if (sy >= chunk.storageArrays.length) continue;
-                    ExtendedBlockStorage storage = chunk.storageArrays[sy];
-                    if (storage == null || storage.isEmpty()) continue;
-
-                    CachedSubchunk cachedSub = cached.get(k);
-                    if (cachedSub != null && cachedSub.storage == storage) {
-                        Rapier.addCachedSubchunk(worldId, cx, sy, cz, cachedSub.handles);
-                        cachedAddsThisTick++;
-                    } else {
-                        int[] handles = Rapier.handleSubchunkAddition(world, chunk, aabbTmp, pos, storage, sy,
-                                worldId);
-                        fullScansAdded++;
-                        if (handles != null) {
-                            putCache(k, new CachedSubchunk(storage, handles));
-                        }
-                    }
-                    tickets.put(k, new Ticket(cx, sy, cz, gameTime));
+                    planned.put(k, tasks.size());
+                    tasks.add(new SubchunkTask(cx, sy, cz, critical));
                 }
             }
         }
-        return iters;
+    }
+
+    private static boolean intersectsSubchunk(AxisAlignedBB box, int cx, int cy, int cz) {
+        double minX = cx * 16.0;
+        double minY = cy * 16.0;
+        double minZ = cz * 16.0;
+        return box.maxX > minX && box.minX < minX + 16.0 && box.maxY > minY && box.minY < minY + 16.0 &&
+                box.maxZ > minZ && box.minZ < minZ + 16.0;
+    }
+
+    private void applyTasks(int worldId, PooledMutableBlockPos pos, long gameTime, long tickStartNanos) {
+        // JNI mutations are serial (Rust world lock). stream() now; keep apply serial even if planning parallelizes.
+        tasks.stream().filter(t -> t.critical).forEach(t -> syncTask(t, worldId, pos, gameTime, false, tickStartNanos));
+        tasks.stream().filter(t -> !t.critical).forEach(t -> syncTask(t, worldId, pos, gameTime, true, tickStartNanos));
+    }
+
+    private void syncTask(SubchunkTask task, int worldId, PooledMutableBlockPos pos, long gameTime,
+                          boolean speculative, long tickStartNanos) {
+        int cx = task.cx;
+        int sy = task.cy;
+        int cz = task.cz;
+        long k = key(cx, sy, cz);
+        Chunk chunk = world.getChunkProvider().getLoadedChunk(cx, cz);
+        if (chunk == null || !chunk.isLoaded()) return;
+
+        boolean hadTicket = tickets.containsKey(k);
+        if (hadTicket) {
+            ExtendedBlockStorage current = sy < chunk.storageArrays.length ? chunk.storageArrays[sy] : null;
+            if (current == null || current.isEmpty()) {
+                Rapier.removeChunk(worldId, cx, sy, cz);
+                tickets.remove(k);
+                cached.remove(k);
+                return;
+            }
+            CachedSubchunk cachedSub = cached.get(k);
+            if (cachedSub != null && cachedSub.storage == current) {
+                tickets.get(k).lastInhabitedTick = gameTime;
+                return;
+            }
+            // storage object replaced or cache invalid: mandatory resync to avoid stale Rapier geometry
+            Rapier.removeChunk(worldId, cx, sy, cz);
+            tickets.remove(k);
+            hadTicket = false;
+        }
+
+        if (sy >= chunk.storageArrays.length) return;
+        ExtendedBlockStorage storage = chunk.storageArrays[sy];
+        if (storage == null || storage.isEmpty()) return;
+
+        if (speculative && System.nanoTime() - tickStartNanos > SPECULATIVE_BUDGET_NANOS) {
+            speculativeSkippedThisTick++;
+            return;
+        }
+
+        CachedSubchunk cachedSub = cached.get(k);
+        if (cachedSub != null && cachedSub.storage == storage) {
+            if (speculative && System.nanoTime() - tickStartNanos > SPECULATIVE_BUDGET_NANOS) {
+                speculativeSkippedThisTick++;
+                return;
+            }
+            Rapier.addCachedSubchunk(worldId, cx, sy, cz, cachedSub.handles);
+            cachedAddsThisTick++;
+        } else {
+            if (speculative) {
+                speculativeSkippedThisTick++;
+                return;
+            }
+            int[] handles = Rapier.handleSubchunkAddition(world, chunk, aabbTmp, pos, storage, sy, worldId);
+            fullScansAdded++;
+            if (handles != null) {
+                putCache(k, new CachedSubchunk(storage, handles));
+            }
+        }
+        tickets.put(k, new Ticket(cx, sy, cz, gameTime));
     }
 
     private void putCache(long k, CachedSubchunk cachedSub) {
-        if (cached.size() >= MAX_CACHED_SUBCHUNKS) {
-            var it = cached.long2ObjectEntrySet().fastIterator();
+        if (cached.size() >= MAX_CACHED_SUBCHUNKS && !cached.containsKey(k)) {
             int toRemove = MAX_CACHED_SUBCHUNKS / 4;
-            for (int i = 0; i < toRemove && it.hasNext(); i++) {
-                it.next();
-                it.remove();
+            long[] victims = new long[toRemove];
+            long[] victimTick = new long[toRemove];
+            int filled = 0;
+            var it = cached.long2ObjectEntrySet().fastIterator();
+            while (it.hasNext() && filled < toRemove) {
+                long ck = it.next().getLongKey();
+                Ticket t = tickets.get(ck);
+                long tick = t == null ? Long.MIN_VALUE : t.lastInhabitedTick;
+                victims[filled] = ck;
+                victimTick[filled] = tick;
+                filled++;
+            }
+            while (it.hasNext()) {
+                long ck = it.next().getLongKey();
+                Ticket t = tickets.get(ck);
+                long tick = t == null ? Long.MIN_VALUE : t.lastInhabitedTick;
+                int worst = 0;
+                for (int i = 1; i < filled; i++) {
+                    if (victimTick[i] < victimTick[worst]) worst = i;
+                }
+                if (tick < victimTick[worst]) {
+                    victims[worst] = ck;
+                    victimTick[worst] = tick;
+                }
+            }
+            for (int i = 0; i < filled; i++) {
+                cached.remove(victims[i]);
             }
         }
         cached.put(k, cachedSub);
@@ -214,6 +369,11 @@ public class ChunkSyncManager {
             int pcx = px >> 4;
             int pcz = pz >> 4;
             long pk = key(pcx, pcy, pcz);
+
+            if (bulkDepth > 0) {
+                bulkTouched.add(pk);
+                continue;
+            }
 
             CachedSubchunk cachedSub = cached.get(pk);
             if (cachedSub == null && !tickets.containsKey(pk) && bodyOverlapsWorldBlock(px, py, pz)) {
@@ -268,6 +428,36 @@ public class ChunkSyncManager {
         return cachedSub;
     }
 
+    private void resyncSubchunk(int worldId, int cx, int cy, int cz) {
+        long k = key(cx, cy, cz);
+        if (isPlotOrHeapChunk(cx, cz)) {
+            if (tickets.remove(k) != null) Rapier.removeChunk(worldId, cx, cy, cz);
+            cached.remove(k);
+            return;
+        }
+        Chunk chunk = world.getChunkProvider().getLoadedChunk(cx, cz);
+        if (chunk == null || !chunk.isLoaded() || cy < 0 || cy >= chunk.storageArrays.length) {
+            if (tickets.remove(k) != null) Rapier.removeChunk(worldId, cx, cy, cz);
+            return;
+        }
+        ExtendedBlockStorage storage = chunk.storageArrays[cy];
+        if (storage == null || storage.isEmpty()) {
+            if (tickets.remove(k) != null) Rapier.removeChunk(worldId, cx, cy, cz);
+            cached.remove(k);
+            return;
+        }
+        PooledMutableBlockPos pos = PooledMutableBlockPos.retain();
+        int[] handles = Rapier.handleSubchunkAddition(world, chunk, aabbTmp, pos, storage, cy, worldId);
+        pos.release();
+        if (handles == null) {
+            if (tickets.remove(k) != null) Rapier.removeChunk(worldId, cx, cy, cz);
+            cached.remove(k);
+            return;
+        }
+        putCache(k, new CachedSubchunk(storage, handles));
+        tickets.put(k, new Ticket(cx, cy, cz, world.getTotalWorldTime()));
+    }
+
     private boolean bodyOverlapsWorldBlock(int x, int y, int z) {
         AxisAlignedBB box = new AxisAlignedBB(x - 1.0, y - 1.0, z - 1.0, x + 2.0, y + 2.0, z + 2.0);
         for (int i = 0, len = Rapier.entities.size(); i < len; i++) {
@@ -285,6 +475,8 @@ public class ChunkSyncManager {
 
     private int cachedAddsThisTick;
     private int fullScansAdded;
+    private int speculativeSkippedThisTick;
+    private int chunksRemovedThisTick;
 
     private boolean isPlotOrHeapChunk(int cx, int cz) {
         return SubWorldAllocator.isInHeapRegion(cx, cz) || SubWorldRegistry.peekPlotChunk(world, cx, cz) != null;

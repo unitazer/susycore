@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use jni::EnvUnowned;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JDoubleArray, JIntArray};
-use jni::sys::{jdouble, jint};
+use jni::sys::{jboolean, jdouble, jint};
 use rapier3d::dynamics::RigidBodyHandle;
 use rapier3d::glamx::Quat;
 use rapier3d::math::{Pose, Vec3};
@@ -73,6 +73,17 @@ impl Scene {
     true
   }
 
+  pub fn set_body_gravity_scale(&mut self, entity: EntityId, scale: Real, wake_up: bool) -> bool {
+    let Some(rb) = self.rb_of(entity) else {
+      return false;
+    };
+    let Some(body) = self.world.bodies.get_mut(rb) else {
+      return false;
+    };
+    body.set_gravity_scale(scale, wake_up);
+    true
+  }
+
   pub fn create_anchor_body(&mut self, entity: EntityId, pos: Vec3) -> RigidBodyHandle {
     if self.chunklet_bodies.contains_key(&entity) {
       log::warn!("chunklet body for {:?} already exists, replacing", entity);
@@ -89,6 +100,47 @@ impl Scene {
         ANCHOR_COLLIDER_HALF_EXTENT,
         ANCHOR_COLLIDER_HALF_EXTENT,
       )
+      .collision_groups(InteractionGroups::new(
+        Group::NONE,
+        Group::NONE,
+        InteractionTestMode::And,
+      ))
+      .build(),
+      handle,
+      &mut self.world.bodies,
+    );
+    self.chunklet_bodies.insert(
+      entity,
+      BodyEntry {
+        rb: handle,
+        chunks: HashMap::new(),
+        anchor: Some(anchor),
+      },
+    );
+    handle
+  }
+
+  pub fn create_carriage_body(&mut self, entity: EntityId, pos: Vec3) -> RigidBodyHandle {
+    if self.chunklet_bodies.contains_key(&entity) {
+      log::warn!("chunklet body for {:?} already exists, replacing", entity);
+      self.remove_chunklet_body(entity);
+    }
+    let handle = self.world.bodies.insert(
+      RigidBodyBuilder::dynamic()
+        .pose(Pose::from_parts(pos, Quat::IDENTITY))
+        .lock_translations()
+        .gravity_scale(0.0)
+        .linear_damping(0.5)
+        .angular_damping(0.5)
+        .build(),
+    );
+    let anchor = self.world.colliders.insert_with_parent(
+      ColliderBuilder::cuboid(
+        ANCHOR_COLLIDER_HALF_EXTENT,
+        ANCHOR_COLLIDER_HALF_EXTENT,
+        ANCHOR_COLLIDER_HALF_EXTENT,
+      )
+      .density(10000.0)
       .collision_groups(InteractionGroups::new(
         Group::NONE,
         Group::NONE,
@@ -157,7 +209,10 @@ impl Scene {
       return false;
     };
     let Some((chunk, handle)) = entry.chunks.get_mut(&coords) else {
-      log::error!("update_body_block on missing chunk {coords:?} of body {}", entity.0);
+      log::error!(
+        "update_body_block on missing chunk {coords:?} of body {}",
+        entity.0
+      );
       return false;
     };
     let handle = *handle;
@@ -470,6 +525,46 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeStaticAnchor(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addCarriageBody(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  tag: jint,
+  x: jdouble,
+  y: jdouble,
+  z: jdouble,
+) -> jint {
+  debug_assert!(world_id >= 0);
+  if tag <= 0 {
+    log::warn!("addCarriageBody on invalid tag {tag}");
+    return 0;
+  }
+  let handle = Scene::with_scene_mut(world_id as usize, |scene| {
+    scene.create_carriage_body(EntityId(tag), Vec3::new(x as Real, y as Real, z as Real))
+  });
+  match handle {
+    Some(_) => tag,
+    None => {
+      log::error!("addCarriageBody on missing scene {world_id}");
+      0
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_removeCarriageBody(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  tag: jint,
+) {
+  debug_assert!(world_id >= 0);
+  Scene::with_scene_mut(world_id as usize, |scene| {
+    scene.remove_chunklet_body(EntityId(tag));
+  });
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setChunkletBodyPose(
   _env: EnvUnowned,
   _class: JClass,
@@ -555,6 +650,22 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setBodyDamping(
   debug_assert!(world_id >= 0);
   Scene::with_scene_mut(world_id as usize, |scene| {
     scene.set_body_damping(EntityId(tag), linear as Real, angular as Real)
+  })
+  .unwrap_or(false)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setBodyGravityScale(
+  _env: EnvUnowned,
+  _class: JClass,
+  world_id: jint,
+  tag: jint,
+  scale: jdouble,
+  wake_up: jboolean,
+) -> bool {
+  debug_assert!(world_id >= 0);
+  Scene::with_scene_mut(world_id as usize, |scene| {
+    scene.set_body_gravity_scale(EntityId(tag), scale as Real, wake_up)
   })
   .unwrap_or(false)
 }

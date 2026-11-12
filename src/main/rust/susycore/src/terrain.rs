@@ -85,22 +85,22 @@ impl TerrainData {
     islands: &mut IslandManager,
     bodies: &mut RigidBodySet,
     softbodies: &mut SoftBodySet,
-  ) {
+  ) -> bool {
     let coords = PackedChunkletCoords::from_xyz(cx, cy, cz);
     let Some((chunk, handle)) = self.chunks.get_mut(&coords) else {
       log::debug!("no chunk at {cx} {cy} {cz}");
-      return;
+      return false;
     };
     let handle = *handle;
     let colliders_store = &*crate::block_collisions::COLLIDERS.read().unwrap();
     let outcome = chunk.set(x, y, z, new.into_block(), colliders_store);
     if !outcome.changed {
-      return;
+      return false;
     }
     if outcome.emptied {
       self.chunks.remove(&coords);
       colliders.remove(handle, islands, bodies, softbodies, true);
-      return;
+      return true;
     }
     if let Some(shape) = chunk.compose() {
       if let Some(co) = colliders.get_mut(handle) {
@@ -110,6 +110,7 @@ impl TerrainData {
       self.chunks.remove(&coords);
       colliders.remove(handle, islands, bodies, softbodies, true);
     }
+    true
   }
 
   pub fn remove(
@@ -140,6 +141,11 @@ impl TerrainData {
     softbodies: &mut SoftBodySet,
   ) -> Option<ColliderHandle> {
     let coords = PackedChunkletCoords::from_xyz(x, y, z);
+    if let Some((existing, handle)) = self.chunks.get(&coords)
+      && existing.blocks == c.blocks
+    {
+      return Some(*handle);
+    }
     let Some(shape) = c.compose() else {
       log::warn!(
         "chunklet {x} {y} {z} compose() returned None (count={} cubes={} has_voxels={})",

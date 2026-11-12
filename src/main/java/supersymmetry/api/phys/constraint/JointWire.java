@@ -2,7 +2,9 @@ package supersymmetry.api.phys.constraint;
 
 import net.minecraft.util.math.Vec3d;
 
-final class JointWire {
+import supersymmetry.api.util.Quaternion;
+
+public final class JointWire {
 
     private static final int WIRE_BUF_LEN = 62;
     private static final int MOTOR_WIRE_OFFSET = 12;
@@ -18,7 +20,7 @@ final class JointWire {
     private final double[] data = new double[WIRE_BUF_LEN];
     private int flags;
 
-    JointWire(int lockedMask, int coupledMask, boolean contactsEnabled) {
+    public JointWire(int lockedMask, int coupledMask, boolean contactsEnabled) {
         flags = lockedMask | (coupledMask << COUPLED_SHIFT) | (contactsEnabled ? CONTACTS_BIT : 0);
         for (Axis axis : Axis.values()) {
             int index = axis.index();
@@ -28,15 +30,15 @@ final class JointWire {
         }
     }
 
-    void limit(Axis axis, double min, double max) {
+    public void limit(Axis axis, double min, double max) {
         int index = axis.index();
         flags |= axis.mask() << LIMIT_SHIFT;
         data[2 * index] = min;
         data[2 * index + 1] = max;
     }
 
-    void motor(Axis axis, double targetPos, double targetVel, double stiffness, double damping, double maxForce,
-               boolean forceBased) {
+    public void motor(Axis axis, double targetPos, double targetVel, double stiffness, double damping, double maxForce,
+                      boolean forceBased) {
         flags |= axis.mask() << MOTOR_SHIFT;
         if (forceBased) {
             flags |= axis.mask() << FORCE_BASED_SHIFT;
@@ -49,29 +51,37 @@ final class JointWire {
         data[slot + 4] = maxForce;
     }
 
-    void frameA(Vec3d translation) {
-        writeFrame(FRAME_A_WIRE_OFFSET, translation);
+    public void frameA(Vec3d translation) {
+        frameA(translation, Quaternion.IDENTITY);
     }
 
-    void frameB(Vec3d translation) {
-        writeFrame(FRAME_B_WIRE_OFFSET, translation);
+    public void frameB(Vec3d translation) {
+        frameB(translation, Quaternion.IDENTITY);
     }
 
-    private void writeFrame(int offset, Vec3d translation) {
+    public void frameA(Vec3d translation, Quaternion rotation) {
+        writeFrame(FRAME_A_WIRE_OFFSET, translation, rotation);
+    }
+
+    public void frameB(Vec3d translation, Quaternion rotation) {
+        writeFrame(FRAME_B_WIRE_OFFSET, translation, rotation);
+    }
+
+    private void writeFrame(int offset, Vec3d translation, Quaternion rotation) {
         data[offset] = translation.x;
         data[offset + 1] = translation.y;
         data[offset + 2] = translation.z;
-        data[offset + 3] = 0.0;
-        data[offset + 4] = 0.0;
-        data[offset + 5] = 0.0;
-        data[offset + 6] = 1.0;
+        data[offset + 3] = rotation.getX();
+        data[offset + 4] = rotation.getY();
+        data[offset + 5] = rotation.getZ();
+        data[offset + 6] = rotation.getW();
     }
 
-    double[] data() {
+    public double[] data() {
         return data;
     }
 
-    int flags() {
+    public int flags() {
         return flags;
     }
 }

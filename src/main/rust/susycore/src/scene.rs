@@ -105,12 +105,12 @@ impl Scene {
       gravity,
       integration_parameters: IntegrationParameters {
         dt: 1. / 20.,
-        min_ccd_dt: 1. / 100.,
+        min_ccd_dt: 1. / 200.,
         normalized_allowed_linear_error: 0.0025,
-        normalized_max_corrective_velocity: 2.0,
-        normalized_prediction_distance: 0.01,
-        num_solver_iterations: 5,
-        max_ccd_substeps: 5,
+        normalized_max_corrective_velocity: 20.0,
+        normalized_prediction_distance: 0.02,
+        num_solver_iterations: 8,
+        max_ccd_substeps: 8,
         friction_model: FrictionModel::Simplified,
         contact_clustering: false,
         ..Default::default()

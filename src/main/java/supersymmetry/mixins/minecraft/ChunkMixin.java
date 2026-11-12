@@ -60,6 +60,7 @@ public class ChunkMixin {
 
         PhysicsWorldEntity body = PhysicsWorldEntity.forPlot(plot);
         if (body != null) {
+            if (body.isBulkEditing()) return;
             BlockPos localPos = body.getLocalPos(pos);
             if (localPos != null) {
                 body.syncPlotBlockToBody(localPos);

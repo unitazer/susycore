@@ -264,6 +264,7 @@ public class TestingMTE extends MultiblockWithDisplayBase {
                 toRemove.add(lpos);
             }
 
+            entity.refreshPlotAABB();
             plot.seedLight();
             this.getWorld().spawnEntity(entity);
             this.spawned = entity;

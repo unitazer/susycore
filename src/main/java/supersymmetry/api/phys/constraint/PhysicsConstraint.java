@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import net.minecraft.entity.Entity;
@@ -41,6 +40,8 @@ public final class PhysicsConstraint {
     private BlockPos anchorSelfBlock = BlockPos.ORIGIN;
     private BlockPos anchorOtherBlock = BlockPos.ORIGIN;
     private boolean contactsEnabled;
+    @Nullable private Axis turretRollAxis;
+    @Nullable private Axis turretPitchAxis;
     private int retryAfterTick;
     private int consecutiveMisses;
     private int instantiateFailures;
@@ -138,6 +139,12 @@ public final class PhysicsConstraint {
 
     public PhysicsConstraint contactsEnabled(boolean enabled) {
         contactsEnabled = enabled;
+        return this;
+    }
+
+    public PhysicsConstraint turretGimbal(Axis rollAxis, Axis pitchAxis) {
+        this.turretRollAxis = rollAxis;
+        this.turretPitchAxis = pitchAxis;
         return this;
     }
 
@@ -270,17 +277,43 @@ public final class PhysicsConstraint {
             if (s.limitMin != null) wire.limit(axis, s.limitMin, s.limitMax);
             if (s.motor != null) {
                 var m = s.motor;
-                var targetPos = m.spring ? (Axis.LINEAR.contains(axis) ? linearComponent(restOffset, axis) : 0.0)
-                        : m.targetPos;
+                var targetPos = m.spring ? (Axis.LINEAR.contains(axis) ? linearComponent(restOffset, axis) : 0.0) :
+                        m.targetPos;
                 wire.motor(axis, targetPos, m.targetVel, m.stiffness, m.damping, m.maxForce, m.forceBased);
             }
         }
-        wire.frameA(anchorCenter(anchorSelfBlock).subtract(self.getRotationPoint()));
-        var frameB = other == null
-                ? self.worldPointFromLocal(anchorCenter(anchorSelfBlock)).subtract(anchorCenter(anchorOtherBlock))
-                : anchorCenter(anchorOtherBlock).subtract(other.getRotationPoint());
+        var frameAT = anchorCenter(anchorSelfBlock).subtract(self.getRotationPoint());
+        var frameARot = turretFrameA();
+        if (frameARot != null) wire.frameA(frameAT, frameARot);
+        else wire.frameA(frameAT);
+        var frameB = other == null ?
+                self.worldPointFromLocal(anchorCenter(anchorSelfBlock)).subtract(anchorCenter(anchorOtherBlock)) :
+                anchorCenter(anchorOtherBlock).subtract(other.getRotationPoint());
         wire.frameB(frameB);
         return wire;
+    }
+
+    @Nullable private supersymmetry.api.util.Quaternion turretFrameA() {
+        if (turretRollAxis == null || turretPitchAxis == null) return null;
+        Vec3d roll = axisDir(turretRollAxis);
+        Vec3d pitch = axisDir(turretPitchAxis);
+        if (roll == null || pitch == null) return null;
+        Vec3d yaw = roll.crossProduct(pitch);
+        if (yaw.dotProduct(new Vec3d(0, 1, 0)) < 0) {
+            pitch = pitch.scale(-1);
+            yaw = roll.crossProduct(pitch);
+        }
+        double len = yaw.lengthSquared();
+        if (len < 1e-12) return null;
+        yaw = yaw.scale(1.0 / Math.sqrt(len));
+        return supersymmetry.api.util.Quaternion.fromBasis(pitch, yaw, roll);
+    }
+
+    @Nullable private static Vec3d axisDir(Axis axis) {
+        if (axis == Axis.ANG_X) return new Vec3d(1, 0, 0);
+        if (axis == Axis.ANG_Y) return new Vec3d(0, 1, 0);
+        if (axis == Axis.ANG_Z) return new Vec3d(0, 0, 1);
+        return null;
     }
 
     public void writeToNBT(NBTTagCompound tag) {
@@ -299,6 +332,8 @@ public final class PhysicsConstraint {
         tag.setInteger("AnchorOtherY", anchorOtherBlock.getY());
         tag.setInteger("AnchorOtherZ", anchorOtherBlock.getZ());
         tag.setBoolean("ContactsEnabled", contactsEnabled);
+        if (turretRollAxis != null) tag.setByte("TurretRollAxis", (byte) turretRollAxis.index());
+        if (turretPitchAxis != null) tag.setByte("TurretPitchAxis", (byte) turretPitchAxis.index());
         var list = new NBTTagList();
         for (var entry : axes.entrySet()) {
             var axisTag = new NBTTagCompound();
@@ -324,8 +359,8 @@ public final class PhysicsConstraint {
     }
 
     public static PhysicsConstraint readFromNBT(NBTTagCompound tag) {
-        var constraint = new PhysicsConstraint(tag.getBoolean("AnchorStatic") ? null
-                : new UUID(tag.getLong("OtherMost"), tag.getLong("OtherLeast")));
+        var constraint = new PhysicsConstraint(
+                tag.getBoolean("AnchorStatic") ? null : new UUID(tag.getLong("OtherMost"), tag.getLong("OtherLeast")));
         constraint.lockedAxes.addAll(axesFromMask(tag.getInteger("LockedAxes")));
         constraint.coupledAxes.addAll(axesFromMask(tag.getInteger("CoupledAxes")));
         constraint.anchorSelfBlock = new BlockPos(tag.getInteger("AnchorSelfX"), tag.getInteger("AnchorSelfY"),
@@ -333,6 +368,15 @@ public final class PhysicsConstraint {
         constraint.anchorOtherBlock = new BlockPos(tag.getInteger("AnchorOtherX"), tag.getInteger("AnchorOtherY"),
                 tag.getInteger("AnchorOtherZ"));
         constraint.contactsEnabled = tag.getBoolean("ContactsEnabled");
+        var axisVals = Axis.values();
+        if (tag.hasKey("TurretRollAxis")) {
+            int i = tag.getByte("TurretRollAxis") & 0xFF;
+            if (i < axisVals.length) constraint.turretRollAxis = axisVals[i];
+        }
+        if (tag.hasKey("TurretPitchAxis")) {
+            int i = tag.getByte("TurretPitchAxis") & 0xFF;
+            if (i < axisVals.length) constraint.turretPitchAxis = axisVals[i];
+        }
         var list = tag.getTagList("Axes", Constants.NBT.TAG_COMPOUND);
         var allAxes = Axis.values();
         for (var i = 0; i < list.tagCount(); i++) {
@@ -430,8 +474,8 @@ public final class PhysicsConstraint {
 
     private static boolean finiteMotor(double targetPos, double targetVel, double stiffness, double damping,
                                        double maxForce) {
-        return Double.isFinite(targetPos) && Double.isFinite(targetVel) && Double.isFinite(stiffness)
-                && Double.isFinite(damping) && Double.isFinite(maxForce);
+        return Double.isFinite(targetPos) && Double.isFinite(targetVel) && Double.isFinite(stiffness) &&
+                Double.isFinite(damping) && Double.isFinite(maxForce);
     }
 
     private AxisState state(Axis axis) {
@@ -439,8 +483,8 @@ public final class PhysicsConstraint {
     }
 
     private Vec3d formationRestOffset(PhysicsWorldEntity self, @Nullable PhysicsWorldEntity other) {
-        var otherCenter = other == null ? anchorCenter(anchorOtherBlock)
-                : other.worldPointFromLocal(anchorCenter(anchorOtherBlock));
+        var otherCenter = other == null ? anchorCenter(anchorOtherBlock) :
+                other.worldPointFromLocal(anchorCenter(anchorOtherBlock));
         return self.getRotation().conjugate()
                 .rotatePoint(otherCenter.subtract(self.worldPointFromLocal(anchorCenter(anchorSelfBlock))));
     }

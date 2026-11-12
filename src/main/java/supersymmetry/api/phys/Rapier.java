@@ -20,6 +20,7 @@ import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 import org.jetbrains.annotations.Nullable;
 
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import supersymmetry.api.SusyLog;
@@ -70,8 +71,7 @@ public class Rapier {
 
     private static final List<AxisAlignedBB> STATE_HANDLE_AABB_TMP = new ArrayList<>();
 
-    public static final int[][] BLOCK_CHANGE_OFFSETS = { { 0, 0, 0 }, { 1, 0, 0 }, { -1, 0, 0 },
-            { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+    public static final int[][] BLOCK_CHANGE_OFFSETS = { { 0, 0, 0 } };
 
     public static int worldId(World world) {
         Integer id = initializedWorlds.get(world);
@@ -400,6 +400,20 @@ public class Rapier {
         removeStaticAnchor(id, tag);
     }
 
+    public static int addCarriageBody(World world, int tag, Vec3d pos) {
+        int id = worldId(world);
+        if (id < 0)
+            return 0;
+        return addCarriageBody(id, tag, pos.x, pos.y, pos.z);
+    }
+
+    public static void removeCarriageBody(World world, int tag) {
+        int id = worldId(world);
+        if (id < 0)
+            return;
+        removeCarriageBody(id, tag);
+    }
+
     // returns a handle
     // the aabbs double array must have n%6==0 elements
     static native int addColliderInfo(
@@ -420,39 +434,44 @@ public class Rapier {
                                                      ExtendedBlockStorage subchunk,
                                                      List<AxisAlignedBB> aabbTmp,
                                                      PooledMutableBlockPos pos) {
-        int[] stateIds = new int[4096];
+        int[] handles = new int[4096];
         try {
             BlockStateContainer container = subchunk.getData();
             BlockStateContainerAccessor accessor = (BlockStateContainerAccessor) container;
+            var palette = accessor.getPalette();
+            var storage = accessor.getStorage();
+            Int2IntOpenHashMap byIndex = new Int2IntOpenHashMap();
+            byIndex.defaultReturnValue(Integer.MIN_VALUE);
+            int chunkBaseX = chunk.x * 16;
+            int chunkBaseZ = chunk.z * 16;
+            int chunkBaseY = subchunk.getYLocation();
+            int count = 0;
             for (int i = 0; i < 4096; i++) {
-                IBlockState s = accessor.getPalette().getBlockState(accessor.getStorage().getAt(i));
-                stateIds[i] = s == null ? 0 : Block.getStateId(s);
+                int pi = storage.getAt(i);
+                int handle = byIndex.get(pi);
+                if (handle == Integer.MIN_VALUE) {
+                    IBlockState s = palette.getBlockState(pi);
+                    int stateId = s == null ? 0 : Block.getStateId(s);
+                    if (stateId == 0) {
+                        handle = 0;
+                    } else {
+                        int lx = i & 0xF;
+                        int lz = (i >> 4) & 0xF;
+                        int ly = (i >> 8) & 0xF;
+                        pos.setPos(chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz);
+                        handle = handleForStateId(stateId, world, pos, chunkBaseX + lx, chunkBaseY + ly,
+                                chunkBaseZ + lz, aabbTmp);
+                    }
+                    byIndex.put(pi, handle);
+                }
+                if (handle == 0) continue;
+                handles[i] = handle;
+                count++;
             }
+            return count == 0 ? null : handles;
         } catch (Throwable t) {
             return computeSubchunkColliderInfoSlow(world, plot, chunk, subchunk, aabbTmp, pos);
         }
-
-        int[] handles = new int[4096];
-        int chunkBaseX = chunk.x * 16;
-        int chunkBaseZ = chunk.z * 16;
-        int chunkBaseY = subchunk.getYLocation();
-        int count = 0;
-        for (int i = 0; i < 4096; i++) {
-            int stateId = stateIds[i];
-            if (stateId == 0)
-                continue;
-            int lx = i & 0xF;
-            int lz = (i >> 4) & 0xF;
-            int ly = (i >> 8) & 0xF;
-            pos.setPos(chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz);
-            int handle = handleForStateId(stateId, world, pos, chunkBaseX + lx, chunkBaseY + ly, chunkBaseZ + lz,
-                    aabbTmp);
-            if (handle == 0)
-                continue;
-            handles[i] = handle;
-            count++;
-        }
-        return count == 0 ? null : handles;
     }
 
     private static int[] computeSubchunkColliderInfoSlow(
@@ -585,6 +604,10 @@ public class Rapier {
 
     private static native void removeStaticAnchor(int world_id, int tag);
 
+    private static native int addCarriageBody(int world_id, int tag, double x, double y, double z);
+
+    private static native void removeCarriageBody(int world_id, int tag);
+
     private static native long addJoint(int world_id, int tag_a, int tag_b, int flags, double[] data);
 
     private static native boolean removeJoint(int world_id, long joint);
@@ -607,6 +630,8 @@ public class Rapier {
     private static native void removeChunkletBody(int world_id, int tag);
 
     private static native boolean setBodyDamping(int world_id, int tag, double linear, double angular);
+
+    private static native boolean setBodyGravityScale(int world_id, int tag, double scale, boolean wake_up);
 
     private static native void setChunkletBodyPose(int world_id, int tag, double x, double y, double z,
                                                    double qw, double qx, double qy, double qz,

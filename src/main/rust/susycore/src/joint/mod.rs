@@ -124,7 +124,11 @@ impl MotorSpec {
     })
   }
 
-  fn from_wire(data: &[jdouble; JOINT_WIRE_BUF_LEN], base: usize, force_based: bool) -> Option<Self> {
+  fn from_wire(
+    data: &[jdouble; JOINT_WIRE_BUF_LEN],
+    base: usize,
+    force_based: bool,
+  ) -> Option<Self> {
     Self::validated(
       force_based,
       data[base],
@@ -144,7 +148,13 @@ impl MotorSpec {
   }
 
   fn apply(self, joint: &mut GenericJoint, axis: JointAxis) {
-    joint.set_motor(axis, self.target_pos, self.target_vel, self.stiffness, self.damping);
+    joint.set_motor(
+      axis,
+      self.target_pos,
+      self.target_vel,
+      self.stiffness,
+      self.damping,
+    );
     joint.set_motor_max_force(axis, self.max_force);
     joint.set_motor_model(axis, self.model());
   }
@@ -187,7 +197,11 @@ fn bit_set(bits: u8, index: usize) -> bool {
 
 fn wire_frame(data: &[jdouble; JOINT_WIRE_BUF_LEN], offset: usize) -> Pose {
   Pose::from_parts(
-    Vec3::new(data[offset] as Real, data[offset + 1] as Real, data[offset + 2] as Real),
+    Vec3::new(
+      data[offset] as Real,
+      data[offset + 1] as Real,
+      data[offset + 2] as Real,
+    ),
     Quat::from_xyzw(
       data[offset + 3] as Real,
       data[offset + 4] as Real,
@@ -200,7 +214,10 @@ fn wire_frame(data: &[jdouble; JOINT_WIRE_BUF_LEN], offset: usize) -> Pose {
 fn valid_frame(frame: Pose) -> bool {
   let q = frame.rotation;
   if !frame.translation.is_finite() {
-    log::warn!("joint frame translation not finite: {:?}", frame.translation);
+    log::warn!(
+      "joint frame translation not finite: {:?}",
+      frame.translation
+    );
     return false;
   }
   if !q.is_finite() || (q.length() - 1.0).abs() > QUAT_NORM_TOLERANCE {
@@ -353,7 +370,11 @@ impl Scene {
       return false;
     };
     let rapier_axis = axis.rapier();
-    if joint.data.locked_axes.contains(JointAxesMask::from(rapier_axis)) {
+    if joint
+      .data
+      .locked_axes
+      .contains(JointAxesMask::from(rapier_axis))
+    {
       log::warn!("set_joint_motor on locked axis {axis_index}");
       return false;
     }
@@ -404,7 +425,11 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_addJoint(
     log::warn!("addJoint rejected malformed joint spec for bodies {tag_a} and {tag_b}");
     return 0;
   };
-  match Scene::with_scene_mut(world_id as usize, |s| s.add_joint(EntityId(tag_a), EntityId(tag_b), &spec)).flatten() {
+  match Scene::with_scene_mut(world_id as usize, |s| {
+    s.add_joint(EntityId(tag_a), EntityId(tag_b), &spec)
+  })
+  .flatten()
+  {
     Some(id) => id.0 as jlong,
     None => {
       log::warn!("addJoint failed for bodies {tag_a} and {tag_b} in world {world_id}");
@@ -451,8 +476,18 @@ pub extern "system" fn Java_supersymmetry_api_phys_Rapier_setJointMotor(
     log::warn!("setJointMotor on invalid axis {axis}");
     return false;
   };
-  let Some(spec) = MotorSpec::validated(force_based, target_pos, target_vel, stiffness, damping, max_force) else {
+  let Some(spec) = MotorSpec::validated(
+    force_based,
+    target_pos,
+    target_vel,
+    stiffness,
+    damping,
+    max_force,
+  ) else {
     return false;
   };
-  Scene::with_scene_mut(world_id as usize, |s| s.set_joint_motor(id, axis_index, spec)).unwrap_or(false)
+  Scene::with_scene_mut(world_id as usize, |s| {
+    s.set_joint_motor(id, axis_index, spec)
+  })
+  .unwrap_or(false)
 }
